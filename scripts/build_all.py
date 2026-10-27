@@ -1,0 +1,1262 @@
+#!/usr/bin/env python3
+"""
+聚合打包脚本：一次性整理并压缩 `tswn_capi`、`tswn-cli`、`tswn_openbox`、现有 `tswn_py` 产物，以及浏览器侧 `tswn_wasm` 包。
+
+设计目标：
+1) `capi`：现场构建并打包
+2) `cli`：现场构建并打包
+3) `openbox`：现场构建并打包 GUI 与 `openbox-cli`
+4) `py`：不现场构建，只收集当前仓库里与 `tswn_py` 版本一致的 Python 分发产物
+5) `wasm`：现场构建 `tswn_wasm`，并用 `wasm-bindgen` 生成浏览器可直接消费的包
+6) 最终输出一个 zip
+
+默认输出结构（示例）：
+
+dist/all/tswn_core_x_y_z_capi_a_b_c_py_m_n_k_wasm_p_q_r_openbox_u_v_w_bundle/
+  README.txt
+  MANIFEST.txt
+  capi/
+    include/
+    lib/
+    examples/
+    README.txt
+    MANIFEST.txt
+  cli/
+    bin/
+      tswn-cli_alpha_x_y_z.exe
+      tswn-cli
+    README.txt
+    MANIFEST.txt
+  openbox/
+    bin/
+      tswn_openbox_alpha_u_v_w.exe
+      openbox-cli_alpha_u_v_w.exe
+      tswn_openbox
+    changelog/
+      CHANGELOG.md
+    README.txt
+    MANIFEST.txt
+  py/
+    dist/
+      *.whl
+      *.tar.gz
+      tswn_py/
+        ...
+    examples/
+      *.py
+    changelog/
+      CHANGELOG.md
+    README.txt
+    MANIFEST.txt
+  wasm/
+    pkg/
+    raw/
+    examples/
+    changelog/
+      CHANGELOG.md
+    README.txt
+    MANIFEST.txt
+
+用法示例：
+  python scripts/build_all.py
+  python scripts/build_all.py --release
+  python scripts/build_all.py --release --clean
+  python scripts/build_all.py -o dist/all
+  python scripts/build_all.py --bundle-name tswn_core_x_y_z_capi_a_b_c_py_m_n_k_wasm_p_q_r_openbox_u_v_w_bundle_win_x64
+  python scripts/build_all.py --skip-capi
+  python scripts/build_all.py --skip-cli
+  python scripts/build_all.py --skip-openbox
+
+说明：
+- `py` 部分只打包当前版本的现有产物，不调用 Python wheel 构建流程；旧版本 wheel 会跳过。
+- `capi` 部分优先复用 `scripts/build_capi.py`，以保证目录结构一致。
+- `wasm` 部分优先复用 `scripts/build_wasm.py`，以保证目录结构一致。
+- `cli` 部分直接执行 cargo build，然后把可执行文件及说明文件整理到结果目录。
+- `openbox` 部分直接执行 cargo build，然后把可执行文件及说明文件整理到结果目录。
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Sequence
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = ROOT / "scripts"
+
+CRATE_CAPI_DIR = ROOT / "crates" / "tswn_capi"
+CRATE_PY_DIR = ROOT / "crates" / "tswn_py"
+CRATE_WASM_DIR = ROOT / "crates" / "tswn_wasm"
+CRATE_OPENBOX_DIR = ROOT / "crates" / "tswn_openbox"
+CRATE_CORE_CARGO_TOML = ROOT / "crates" / "tswn_core" / "Cargo.toml"
+CRATE_CAPI_CARGO_TOML = CRATE_CAPI_DIR / "Cargo.toml"
+CRATE_PY_CARGO_TOML = CRATE_PY_DIR / "Cargo.toml"
+CRATE_WASM_CARGO_TOML = CRATE_WASM_DIR / "Cargo.toml"
+CRATE_OPENBOX_CARGO_TOML = CRATE_OPENBOX_DIR / "Cargo.toml"
+CORE_CHANGELOG = ROOT / "crates" / "tswn_core" / "CHANGELOG.md"
+CAPI_CHANGELOG = CRATE_CAPI_DIR / "CHANGELOG.md"
+PY_CHANGELOG = CRATE_PY_DIR / "CHANGELOG.md"
+WASM_CHANGELOG = CRATE_WASM_DIR / "CHANGELOG.md"
+OPENBOX_CHANGELOG = CRATE_OPENBOX_DIR / "CHANGELOG.md"
+RELEASE_DOCS_DIR = ROOT / "docs" / "releases"
+LINUX_CAPI_ARTIFACT = ROOT / "target" / "release" / "libtswn_capi.so"
+LINUX_CLI_ARTIFACT = ROOT / "target" / "release" / "tswn-cli"
+LINUX_OPENBOX_ARTIFACT = ROOT / "target" / "release" / "tswn_openbox"
+
+DEFAULT_OUTPUT_DIR = ROOT / "dist" / "all"
+
+CAPI_BUILD_SCRIPT = SCRIPTS_DIR / "build_capi.py"
+WASM_BUILD_SCRIPT = SCRIPTS_DIR / "build_wasm.py"
+
+
+OHOS_DEFAULT_TARGET = "aarch64-unknown-linux-ohos"
+
+
+def run(cmd: Sequence[str | Path], cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
+    print(f"$ {' '.join(str(x) for x in cmd)}", flush=True)
+    subprocess.run([str(x) for x in cmd], cwd=str(cwd), env=env, check=True)
+
+
+def ensure_exists(path: Path, desc: str) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"找不到 {desc}: {path}")
+
+
+def remove_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def copy_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    print(f"[copy] {src} -> {dst}")
+
+
+def copy_tree(src: Path, dst: Path) -> None:
+    ensure_exists(src, "目录")
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    print(f"[copytree] {src} -> {dst}")
+
+
+def copy_tree_files(src_dir: Path, dst_dir: Path) -> None:
+    ensure_exists(src_dir, "目录")
+    for path in sorted(src_dir.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(src_dir)
+            copy_file(path, dst_dir / rel)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="构建并聚合打包 capi / cli / openbox / 现有 py 产物 / wasm 包",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        default=str(DEFAULT_OUTPUT_DIR),
+        metavar="DIR",
+        help="输出目录（默认：dist/all）",
+    )
+    p.add_argument(
+        "--bundle-name",
+        default=None,
+        help="bundle 目录名与 zip 基名（默认：自动按 core/capi/py/wasm/openbox 版本生成）",
+    )
+    p.add_argument(
+        "--release",
+        action="store_true",
+        help="对 capi/cli/openbox/wasm 使用 release 构建（默认 debug）",
+    )
+    p.add_argument(
+        "--clean",
+        action="store_true",
+        help="构建前清空 bundle 目录与最终 zip",
+    )
+    p.add_argument(
+        "--target",
+        default=None,
+        help="cargo target triple（可选）",
+    )
+    p.add_argument(
+        "--skip-capi",
+        action="store_true",
+        help="跳过 capi 打包",
+    )
+    p.add_argument(
+        "--skip-cli",
+        action="store_true",
+        help="跳过 cli 打包",
+    )
+    p.add_argument(
+        "--skip-openbox",
+        action="store_true",
+        help="跳过 openbox 打包",
+    )
+    p.add_argument(
+        "--skip-py",
+        action="store_true",
+        help="跳过 py 打包",
+    )
+    p.add_argument(
+        "--skip-wasm",
+        action="store_true",
+        help="跳过 wasm 打包",
+    )
+    p.add_argument(
+        "--capi-with-example-build",
+        action="store_true",
+        help="传给 build_capi.py：额外尝试编译 examples",
+    )
+    p.add_argument(
+        "--cli-features",
+        default="no_debug,mimalloc_alloc",
+        help="CLI 构建 features，逗号分隔；传空字符串表示不追加 features（默认：no_debug,mimalloc_alloc）",
+    )
+    p.add_argument(
+        "--pgo",
+        action="store_true",
+        help="对未跳过的 CLI/Openbox 启用本机 release PGO；Openbox 训练资源路径待适配，当前完整发布使用普通 --release，收益需同机复测",
+    )
+    p.add_argument(
+        "--pgo-train-runs",
+        type=int,
+        default=5000,
+        help="CLI 的 PGO 每个训练输入场数（默认 5000）",
+    )
+    p.add_argument(
+        "--pgo-openbox-train-runs",
+        type=int,
+        default=1500,
+        help="Openbox 的 PGO 每个 CQP 靶子场数（默认 1500）",
+    )
+    p.add_argument(
+        "--include-ohos-cli",
+        action="store_true",
+        help="额外构建 OpenHarmony/OHOS tswn-cli，并打包为未签名 .bin（默认关闭，需要 OHOS native SDK）",
+    )
+    p.add_argument(
+        "--ohos-target",
+        default=OHOS_DEFAULT_TARGET,
+        help=f"OHOS CLI cargo target triple（默认：{OHOS_DEFAULT_TARGET}）",
+    )
+    p.add_argument(
+        "--ohos-sdk",
+        default=None,
+        help="OpenHarmony native SDK 目录；默认读取 OHOS_NATIVE_SDK",
+    )
+    p.add_argument(
+        "--ohos-cli-features",
+        default="no_debug",
+        help="OHOS CLI 构建 features，逗号分隔；传空字符串表示不追加 features（默认：no_debug）",
+    )
+    p.add_argument(
+        "--openbox-features",
+        default="no_debug,mimalloc_alloc",
+        help="Openbox 构建 features，逗号分隔；传空字符串表示不追加 features（默认：no_debug,mimalloc_alloc）",
+    )
+    p.add_argument(
+        "--cargo",
+        nargs=argparse.REMAINDER,
+        default=[],
+        help="追加到 cargo/build_capi 的额外参数（放在最后，如：--cargo -vv）",
+    )
+    return p.parse_args(argv)
+
+
+def cargo_profile_dir(release: bool, target: str | None) -> Path:
+    profile = "release" if release else "debug"
+    target_root = ROOT / "target"
+    return target_root / target / profile if target else target_root / profile
+
+
+def cli_binary_candidates() -> list[str]:
+    system = platform.system().lower()
+    if system == "windows":
+        return ["tswn-cli.exe", "tswn_cli.exe"]
+    return ["tswn-cli", "tswn_cli"]
+
+
+def openbox_binary_candidates() -> list[str]:
+    system = platform.system().lower()
+    if system == "windows":
+        return ["tswn_openbox.exe", "tswn-openbox.exe"]
+    return ["tswn_openbox", "tswn-openbox"]
+
+
+def find_cli_binary(out_dir: Path) -> Path:
+    for name in cli_binary_candidates():
+        candidate = out_dir / name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    patterns = ["*tswn-cli*", "*tswn_cli*"]
+    for pattern in patterns:
+        for candidate in sorted(out_dir.glob(pattern)):
+            if candidate.is_file():
+                return candidate
+
+    raise FileNotFoundError(f"未找到 tswn-cli 构建产物，已检查目录：{out_dir}")
+
+
+def find_openbox_binary(out_dir: Path) -> Path:
+    for name in openbox_binary_candidates():
+        candidate = out_dir / name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    patterns = ["*tswn_openbox*", "*tswn-openbox*"]
+    for pattern in patterns:
+        for candidate in sorted(out_dir.glob(pattern)):
+            if candidate.is_file():
+                return candidate
+
+    raise FileNotFoundError(f"未找到 tswn_openbox 构建产物，已检查目录：{out_dir}")
+
+
+def cli_support_artifacts(binary: Path) -> list[Path]:
+    system = platform.system().lower()
+    found: list[Path] = []
+    if system == "windows":
+        pdb = binary.with_suffix(".pdb")
+        if pdb.exists() and pdb.is_file():
+            found.append(pdb)
+    return found
+
+
+def openbox_support_artifacts(binary: Path) -> list[Path]:
+    system = platform.system().lower()
+    found: list[Path] = []
+    if system == "windows":
+        pdb = binary.with_suffix(".pdb")
+        if pdb.exists() and pdb.is_file():
+            found.append(pdb)
+    return found
+
+
+def _cargo_package_version(cargo_toml: Path) -> str:
+    ensure_exists(cargo_toml, "Cargo.toml")
+    for line in cargo_toml.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("version = "):
+            value = stripped.split("=", 1)[1].strip().strip('"')
+            if value:
+                return value
+    raise RuntimeError(f"未能从 {cargo_toml} 解析版本")
+
+
+def tswn_core_version() -> str:
+    return _cargo_package_version(CRATE_CORE_CARGO_TOML)
+
+
+def tswn_capi_version() -> str:
+    return _cargo_package_version(CRATE_CAPI_CARGO_TOML)
+
+
+def tswn_py_version() -> str:
+    return _cargo_package_version(CRATE_PY_CARGO_TOML)
+
+
+def tswn_wasm_version() -> str:
+    return _cargo_package_version(CRATE_WASM_CARGO_TOML)
+
+
+def tswn_openbox_version() -> str:
+    return _cargo_package_version(CRATE_OPENBOX_CARGO_TOML)
+
+
+def _version_token(version: str) -> str:
+    return version.replace(".", "_").replace("-", "_")
+
+
+def default_bundle_name() -> str:
+    return (
+        f"tswn_core_{_version_token(tswn_core_version())}"
+        f"_capi_{_version_token(tswn_capi_version())}"
+        f"_py_{_version_token(tswn_py_version())}"
+        f"_wasm_{_version_token(tswn_wasm_version())}"
+        f"_openbox_{_version_token(tswn_openbox_version())}"
+        "_bundle"
+    )
+
+
+def bundled_cli_binary_name(src_binary: Path) -> str:
+    version = _version_token(tswn_core_version())
+    suffix = ".exe" if src_binary.suffix.lower() == ".exe" else ".bin"
+    return f"tswn-cli_alpha_{version}{suffix}"
+
+
+def bundled_ohos_cli_binary_name(target: str) -> str:
+    version = _version_token(tswn_core_version())
+    target_token = target.replace("-", "_")
+    return f"tswn-cli_alpha_{version}_{target_token}_unsigned.bin"
+
+
+def bundled_openbox_binary_name(src_binary: Path) -> str:
+    version = _version_token(tswn_openbox_version())
+    suffix = ".exe" if src_binary.suffix.lower() == ".exe" else ".bin"
+    return f"tswn_openbox_alpha_{version}{suffix}"
+
+
+def bundled_openbox_cli_binary_name(src_binary: Path) -> str:
+    version = _version_token(tswn_openbox_version())
+    suffix = ".exe" if src_binary.suffix.lower() == ".exe" else ".bin"
+    return f"openbox-cli_alpha_{version}{suffix}"
+
+
+def package_component_changelog(dst_dir: Path, changelog_src: Path, update_doc_src: Path | None = None) -> list[Path]:
+    copied: list[Path] = []
+    changelog_dir = dst_dir / "changelog"
+    changelog_dir.mkdir(parents=True, exist_ok=True)
+
+    if changelog_src.exists():
+        dst = changelog_dir / "CHANGELOG.md"
+        copy_file(changelog_src, dst)
+        copied.append(dst)
+
+    if update_doc_src is not None and update_doc_src.exists():
+        dst = changelog_dir / update_doc_src.name
+        copy_file(update_doc_src, dst)
+        copied.append(dst)
+
+    return copied
+
+
+def collect_existing_linux_cli_artifacts(dst_dir: Path, copied_support: list[Path]) -> None:
+    if not LINUX_CLI_ARTIFACT.exists():
+        return
+
+    bin_dir = dst_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    dst = bin_dir / bundled_cli_binary_name(LINUX_CLI_ARTIFACT)
+    copy_file(LINUX_CLI_ARTIFACT, dst)
+    copied_support.append(dst)
+
+
+def collect_existing_linux_openbox_artifacts(dst_dir: Path, copied_support: list[Path]) -> None:
+    if not LINUX_OPENBOX_ARTIFACT.exists():
+        return
+
+    bin_dir = dst_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    dst = bin_dir / bundled_openbox_binary_name(LINUX_OPENBOX_ARTIFACT)
+    copy_file(LINUX_OPENBOX_ARTIFACT, dst)
+    copied_support.append(dst)
+
+
+def collect_existing_linux_capi_artifacts(dst_dir: Path) -> None:
+    if not LINUX_CAPI_ARTIFACT.exists():
+        return
+
+    lib_dir = dst_dir / "lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    copy_file(LINUX_CAPI_ARTIFACT, lib_dir / LINUX_CAPI_ARTIFACT.name)
+
+
+def ohos_env_key_suffix(target: str) -> str:
+    return target.replace("-", "_")
+
+
+def ohos_link_target(target: str) -> str:
+    mapping = {
+        "aarch64-unknown-linux-ohos": "aarch64-linux-ohos",
+        "armv7-unknown-linux-ohos": "arm-linux-ohos",
+        "x86_64-unknown-linux-ohos": "x86_64-linux-ohos",
+    }
+    try:
+        return mapping[target]
+    except KeyError as err:
+        raise ValueError(f"暂不支持的 OHOS target: {target}") from err
+
+
+def ohos_tool(native_sdk: Path, name: str) -> Path:
+    system = platform.system().lower()
+    suffix = ".exe" if system == "windows" else ""
+    return native_sdk / "llvm" / "bin" / f"{name}{suffix}"
+
+
+def build_ohos_env(native_sdk: Path, target: str) -> dict[str, str]:
+    sdk = native_sdk.resolve()
+    clang = ohos_tool(sdk, "clang")
+    clangxx = ohos_tool(sdk, "clang++")
+    ar = ohos_tool(sdk, "llvm-ar")
+    sysroot = sdk / "sysroot"
+    cmake_toolchain = sdk / "build" / "cmake" / "ohos.toolchain.cmake"
+
+    required_files = [clang, clangxx, ar, cmake_toolchain]
+    for path in required_files:
+        ensure_exists(path, "OpenHarmony SDK 文件")
+    if not sysroot.exists() or not sysroot.is_dir():
+        raise FileNotFoundError(f"找不到 OpenHarmony SDK sysroot: {sysroot}")
+
+    link_target = ohos_link_target(target)
+    suffix = ohos_env_key_suffix(target)
+    suffix_upper = suffix.upper()
+    common_flags = f'-target {link_target} --sysroot="{sysroot}" -D__MUSL__'
+
+    env = os.environ.copy()
+    env["OHOS_NATIVE_SDK"] = str(sdk)
+    env[f"CARGO_TARGET_{suffix_upper}_LINKER"] = str(clang)
+    env[f"AR_{suffix}"] = str(ar)
+    env[f"CC_{suffix}"] = str(clang)
+    env[f"CXX_{suffix}"] = str(clangxx)
+    env["CC_SHELL_ESCAPED_FLAGS"] = "1"
+    env[f"CFLAGS_{suffix}"] = common_flags
+    env[f"CXXFLAGS_{suffix}"] = common_flags
+    env[f"CMAKE_TOOLCHAIN_FILE_{suffix}"] = str(cmake_toolchain)
+
+    sep = "\x1f"
+    rustflags = [
+        "-Clink-arg=-target",
+        f"-Clink-arg={link_target}",
+        f"-Clink-arg=--sysroot={sysroot}",
+        "-Clink-arg=-D__MUSL__",
+    ]
+    if env.get("CARGO_ENCODED_RUSTFLAGS"):
+        rustflags.extend(env["CARGO_ENCODED_RUSTFLAGS"].split(sep))
+    env["CARGO_ENCODED_RUSTFLAGS"] = sep.join(rustflags)
+    return env
+
+
+def build_with_pgo(kind: str, features: str, train_runs: int) -> Path:
+    """用 scripts/pgo_build.py 走一遍 PGO 流程，返回优化后的产物目录。
+
+    PGO 只对本机 target 有意义（需要在本机跑训练），因此交叉编译时不启用。
+    """
+    cmd: list[str | Path] = [
+        sys.executable,
+        SCRIPTS_DIR / "pgo_build.py",
+        "--kind",
+        kind,
+        "--features",
+        features,
+        "--train-runs",
+        str(train_runs),
+    ]
+    run(cmd, cwd=ROOT)
+    return ROOT / "target" / "pgo" / kind / "build-use" / "release"
+
+
+def build_cli(
+    dst_dir: Path,
+    release: bool,
+    target: str | None,
+    cli_features: str,
+    extra_cargo: list[str],
+    pgo: bool = False,
+    pgo_train_runs: int = 5000,
+) -> tuple[Path, list[Path]]:
+    if pgo:
+        if target:
+            raise RuntimeError("PGO 需要在本机运行训练，不能和 --target 交叉编译一起用")
+        if not release:
+            raise RuntimeError("PGO 只在 release 口径下有意义")
+        out_dir = build_with_pgo(kind="cli", features=cli_features, train_runs=pgo_train_runs)
+    else:
+        out_dir = cargo_profile_dir(release=release, target=target)
+
+        cmd: list[str] = ["cargo", "build", "-p", "tswn_core", "--bin", "tswn-cli"]
+        if release:
+            cmd.append("--release")
+        if target:
+            cmd += ["--target", target]
+        if cli_features.strip():
+            cmd += ["--features", cli_features]
+        if extra_cargo:
+            cmd += extra_cargo
+
+        run(cmd, cwd=ROOT)
+
+    binary = find_cli_binary(out_dir)
+    support = cli_support_artifacts(binary)
+
+    bin_dir = dst_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    bundled_binary = bin_dir / bundled_cli_binary_name(binary)
+    copy_file(binary, bundled_binary)
+    copied_support: list[Path] = []
+    for item in support:
+        dst = bin_dir / item.name
+        copy_file(item, dst)
+        copied_support.append(dst)
+
+    collect_existing_linux_cli_artifacts(dst_dir, copied_support)
+
+    return bundled_binary, copied_support
+
+
+def build_ohos_cli(
+    dst_dir: Path,
+    target: str,
+    native_sdk: Path,
+    cli_features: str,
+    extra_cargo: list[str],
+) -> Path:
+    env = build_ohos_env(native_sdk=native_sdk, target=target)
+    out_dir = cargo_profile_dir(release=True, target=target)
+
+    cmd: list[str] = [
+        "cargo",
+        "build",
+        "-p",
+        "tswn_core",
+        "--bin",
+        "tswn-cli",
+        "--release",
+        "--target",
+        target,
+    ]
+    if cli_features.strip():
+        cmd += ["--features", cli_features]
+    if extra_cargo:
+        cmd += extra_cargo
+
+    run(cmd, cwd=ROOT, env=env)
+
+    binary = find_cli_binary(out_dir)
+    bin_dir = dst_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    bundled_binary = bin_dir / bundled_ohos_cli_binary_name(target)
+    copy_file(binary, bundled_binary)
+    return bundled_binary
+
+
+def build_openbox(
+    dst_dir: Path,
+    release: bool,
+    target: str | None,
+    openbox_features: str,
+    extra_cargo: list[str],
+    pgo: bool = False,
+    pgo_train_runs: int = 1500,
+) -> tuple[Path, Path, list[Path]]:
+    if pgo:
+        if target:
+            raise RuntimeError("PGO 需要在本机运行训练，不能和 --target 交叉编译一起用")
+        if not release:
+            raise RuntimeError("PGO 只在 release 口径下有意义")
+        out_dir = build_with_pgo(kind="openbox", features=openbox_features, train_runs=pgo_train_runs)
+    else:
+        out_dir = cargo_profile_dir(release=release, target=target)
+
+        cmd: list[str] = ["cargo", "build", "-p", "tswn_openbox"]
+        if release:
+            cmd.append("--release")
+        if target:
+            cmd += ["--target", target]
+        if openbox_features.strip():
+            cmd += ["--features", openbox_features]
+        if extra_cargo:
+            cmd += extra_cargo
+
+        run(cmd, cwd=ROOT)
+
+    binary = find_openbox_binary(out_dir)
+    cli_binary = out_dir / ("openbox-cli.exe" if binary.suffix.lower() == ".exe" else "openbox-cli")
+    ensure_exists(cli_binary, "openbox-cli 构建产物")
+    support = openbox_support_artifacts(binary) + cli_support_artifacts(cli_binary)
+
+    bin_dir = dst_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    bundled_binary = bin_dir / bundled_openbox_binary_name(binary)
+    copy_file(binary, bundled_binary)
+    bundled_cli_binary = bin_dir / bundled_openbox_cli_binary_name(cli_binary)
+    copy_file(cli_binary, bundled_cli_binary)
+    copied_support: list[Path] = []
+    for item in support:
+        dst = bin_dir / item.name
+        copy_file(item, dst)
+        copied_support.append(dst)
+
+    collect_existing_linux_openbox_artifacts(dst_dir, copied_support)
+
+    return bundled_binary, bundled_cli_binary, copied_support
+
+
+def write_cli_readme(
+    dst_dir: Path,
+    binary_path: Path,
+    support_files: list[Path],
+    ohos_binary_path: Path | None,
+) -> None:
+    lines = [
+        "# tswn-cli package",
+        "",
+        "本目录由 `scripts/build_all.py` 生成。",
+        "",
+        "## 内容",
+        "",
+        f"- Windows 可执行文件：`bin/{binary_path.name}`",
+    ]
+    for item in support_files:
+        lines.append(f"- 附带产物：`bin/{item.name}`")
+    if ohos_binary_path is not None:
+        lines.append(f"- OpenHarmony/OHOS 未签名二进制：`bin/{ohos_binary_path.name}`")
+
+    lines += [
+        "",
+        "## 示例",
+        "",
+        f"- `bin/{binary_path.name} fight --help`",
+        f"- `bin/{binary_path.name} bench auto --help`",
+        f"- `bin/{binary_path.name} icon show --help`",
+        "",
+        "## 说明",
+        "",
+        "- 聚合包会现场构建当前平台的 CLI，并在存在时额外收集已有的 Linux `tswn-cli` 二进制。",
+        "- 使用 `--include-ohos-cli` 时会额外构建 OHOS CLI，并输出 `_unsigned.bin`；正式部署前如需签名请使用目标环境要求的签名流程。",
+        "- Windows 与 Linux 产物会一起放在 `cli/bin/` 下，便于统一分发。",
+        "",
+    ]
+
+    path = dst_dir / "README.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_cli_manifest(
+    dst_dir: Path,
+    release: bool,
+    target: str | None,
+    binary_path: Path,
+    support_files: list[Path],
+    ohos_binary_path: Path | None,
+    ohos_target: str | None,
+) -> None:
+    lines = [
+        "# tswn-cli manifest",
+        "",
+        f"profile={'release' if release else 'debug'}",
+        f"target={target or ''}",
+        f"ohos_target={ohos_target or ''}",
+        f"platform={platform.platform()}",
+        "",
+        "[bin]",
+        binary_path.name,
+        "",
+        "[support]",
+    ]
+    if support_files:
+        lines.extend(p.name for p in support_files)
+    else:
+        lines.append("(none)")
+
+    lines += [
+        "",
+        "[ohos_unsigned]",
+    ]
+    if ohos_binary_path is not None:
+        lines.append(ohos_binary_path.name)
+    else:
+        lines.append("(none)")
+
+    path = dst_dir / "MANIFEST.txt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_openbox_readme(dst_dir: Path, binary_path: Path, cli_binary_path: Path, support_files: list[Path]) -> None:
+    lines = [
+        "# tswn_openbox package",
+        "",
+        "本目录由 `scripts/build_all.py` 生成。",
+        "",
+        "## 内容",
+        "",
+        f"- 当前平台 GUI：`bin/{binary_path.name}`",
+        f"- 当前平台无头 CLI：`bin/{cli_binary_path.name}`",
+    ]
+    for item in support_files:
+        lines.append(f"- 附带产物：`bin/{item.name}`")
+
+    lines += [
+        "",
+        "## 运行",
+        "",
+        f"- 直接运行 `bin/{binary_path.name}`。",
+        f"- 命令行入口：`bin/{cli_binary_path.name} --help`。",
+        "- `tswn_openbox` 是本地 GUI 面板，用来把常用 `tswn-cli` 工作流做成点击即用的界面。",
+        "- 首次启动时会在当前工作目录下自动创建 `setting/` 默认预设目录。",
+        "",
+        "## 说明",
+        "",
+        "- 聚合包会现场构建当前平台的 Openbox，并在存在时额外收集已有的 Linux `tswn_openbox` 二进制。",
+        "- Windows 与 Linux 产物会一起放在 `openbox/bin/` 下，便于统一分发。",
+        "",
+    ]
+
+    path = dst_dir / "README.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_openbox_manifest(
+    dst_dir: Path,
+    release: bool,
+    target: str | None,
+    binary_path: Path,
+    cli_binary_path: Path,
+    support_files: list[Path],
+) -> None:
+    lines = [
+        "# tswn_openbox manifest",
+        "",
+        f"profile={'release' if release else 'debug'}",
+        f"target={target or ''}",
+        f"platform={platform.platform()}",
+        "",
+        "[bin]",
+        binary_path.name,
+        cli_binary_path.name,
+        "",
+        "[support]",
+    ]
+    if support_files:
+        lines.extend(p.name for p in support_files)
+    else:
+        lines.append("(none)")
+
+    path = dst_dir / "MANIFEST.txt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def build_capi(dst_dir: Path, args: argparse.Namespace) -> None:
+    ensure_exists(CAPI_BUILD_SCRIPT, "build_capi.py")
+
+    cmd: list[str | Path] = [
+        sys.executable,
+        CAPI_BUILD_SCRIPT,
+        "--output-dir",
+        str(dst_dir),
+    ]
+    if args.release:
+        cmd.append("--release")
+    if args.target:
+        cmd += ["--target", args.target]
+    if args.capi_with_example_build:
+        cmd.append("--with-example-build")
+    if args.cargo:
+        cmd.append("--cargo")
+        cmd += args.cargo
+
+    run(cmd, cwd=ROOT)
+    collect_existing_linux_capi_artifacts(dst_dir)
+
+
+def build_wasm(dst_dir: Path, args: argparse.Namespace) -> None:
+    ensure_exists(WASM_BUILD_SCRIPT, "build_wasm.py")
+
+    cmd: list[str | Path] = [
+        sys.executable,
+        WASM_BUILD_SCRIPT,
+        "--output-dir",
+        str(dst_dir),
+    ]
+    if args.release:
+        cmd.append("--release")
+    if args.cargo:
+        cmd.append("--cargo")
+        cmd += args.cargo
+
+    run(cmd, cwd=ROOT)
+
+
+def collect_py_artifacts(dst_dir: Path) -> tuple[list[Path], list[Path], list[Path]]:
+    """
+    返回：
+    - copied_files: 复制到 bundle 内的普通文件相对路径
+    - copied_dirs: 复制到 bundle 内的目录相对路径
+    - source_hits: 源目录中实际找到并复制的文件相对路径（用于 manifest）
+    """
+    dist_src = CRATE_PY_DIR / "dist"
+    examples_src = CRATE_PY_DIR / "examples"
+    changelog_src = PY_CHANGELOG
+    dst_dist = dst_dir / "dist"
+    dst_examples = dst_dir / "examples"
+    dst_changelog = dst_dir / "changelog"
+
+    copied_files: list[Path] = []
+    copied_dirs: list[Path] = []
+    source_hits: list[Path] = []
+
+    dst_dist.mkdir(parents=True, exist_ok=True)
+
+    current_dist_prefix = f"tswn_py-{tswn_py_version()}"
+    if dist_src.exists():
+        for item in sorted(dist_src.iterdir()):
+            if item.is_file():
+                is_distribution = item.suffix == ".whl" or item.name.endswith(".tar.gz")
+                matches_current_version = item.name.startswith(
+                    f"{current_dist_prefix}-"
+                ) or item.name == f"{current_dist_prefix}.tar.gz"
+                if is_distribution and not matches_current_version:
+                    print(f"[skip] Python 分发产物版本不匹配：{item.name}（当前 {tswn_py_version()}）")
+                    continue
+                copy_file(item, dst_dist / item.name)
+                copied_files.append(Path("dist") / item.name)
+                source_hits.append(Path("dist") / item.name)
+            elif item.is_dir():
+                copy_tree(item, dst_dist / item.name)
+                copied_dirs.append(Path("dist") / item.name)
+                for nested in sorted(item.rglob("*")):
+                    if nested.is_file():
+                        source_hits.append(Path("dist") / nested.relative_to(dist_src).as_posix())
+
+    if examples_src.exists():
+        copy_tree(examples_src, dst_examples)
+        copied_dirs.append(Path("examples"))
+        for nested in sorted(examples_src.rglob("*")):
+            if nested.is_file():
+                source_hits.append(Path("examples") / nested.relative_to(examples_src).as_posix())
+
+    dst_changelog.mkdir(parents=True, exist_ok=True)
+    if changelog_src.exists():
+        copy_file(changelog_src, dst_changelog / "CHANGELOG.md")
+        copied_files.append(Path("changelog") / "CHANGELOG.md")
+        source_hits.append(Path("changelog") / "CHANGELOG.md")
+
+    return copied_files, copied_dirs, source_hits
+
+
+def write_py_readme(dst_dir: Path, copied_files: list[Path], copied_dirs: list[Path]) -> None:
+    lines = [
+        "# tswn_py package snapshot",
+        "",
+        "本目录由 `scripts/build_all.py` 生成。",
+        "",
+        "注意：这里不会现场构建 Python 产物，只会收集仓库里与当前 tswn_py 版本一致的内容。",
+        "",
+        "## 收集结果",
+        "",
+    ]
+
+    if not copied_files and not copied_dirs:
+        lines.append("- 未发现现有 Python 分发产物。")
+    else:
+        for item in copied_files:
+            lines.append(f"- 文件：`{item.as_posix()}`")
+        for item in copied_dirs:
+            lines.append(f"- 目录：`{item.as_posix()}`")
+
+    lines += [
+        "",
+        "## 说明",
+        "",
+        "- 若需要 wheel，请先单独执行 Python 构建流程；旧版本 wheel 不会进入当前版本聚合包。",
+        "- `examples/` 会一并收集，方便直接参考 Python 用法。",
+        "- `changelog/` 会附带 `tswn_py` 的 changelog，方便对外查看 Python 侧版本变化。",
+        "- 本目录仅作为现有产物快照，不保证覆盖你需要的全部 Python/ABI 环境。",
+        "",
+    ]
+
+    path = dst_dir / "README.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_py_manifest(dst_dir: Path, source_hits: list[Path]) -> None:
+    lines = [
+        "# tswn_py manifest",
+        "",
+        f"platform={platform.platform()}",
+        "",
+        "[files]",
+    ]
+    if source_hits:
+        lines.extend(p.as_posix() for p in source_hits)
+    else:
+        lines.append("(none)")
+
+    path = dst_dir / "MANIFEST.txt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_root_readme(bundle_dir: Path, enabled: list[str], skipped: list[str]) -> None:
+    system = platform.system().lower()
+    cli_binary_name = bundled_cli_binary_name(Path("tswn-cli.exe" if system == "windows" else "tswn-cli"))
+    ohos_cli_binary_name = bundled_ohos_cli_binary_name(OHOS_DEFAULT_TARGET)
+    openbox_binary_name = bundled_openbox_binary_name(Path("tswn_openbox.exe" if system == "windows" else "tswn_openbox"))
+    openbox_cli_binary_name = bundled_openbox_cli_binary_name(Path("openbox-cli.exe" if system == "windows" else "openbox-cli"))
+
+    lines = [
+        "# tswn bundle",
+        "",
+        "本目录由 `scripts/build_all.py` 生成。",
+        "",
+        "## 版本概览",
+        "",
+        f"- `tswn_core`: `{tswn_core_version()}`",
+        f"- `tswn_capi`: `{tswn_capi_version()}`",
+        f"- `tswn_py`: `{tswn_py_version()}`",
+        f"- `tswn_wasm`: `{tswn_wasm_version()}`",
+        f"- `tswn_openbox`: `{tswn_openbox_version()}`",
+        "",
+        "## 包含内容",
+        "",
+    ]
+
+    if enabled:
+        for name in enabled:
+            lines.append(f"- `{name}/`")
+    else:
+        lines.append("- (none)")
+
+    lines += [
+        "",
+        "## 跳过内容",
+        "",
+    ]
+    if skipped:
+        for name in skipped:
+            lines.append(f"- `{name}`")
+    else:
+        lines.append("- (none)")
+
+    lines += [
+        "",
+        "## 主要产物",
+        "",
+        f"- CLI: `cli/bin/{cli_binary_name}`、可选的 Linux `cli/bin/tswn-cli_alpha_*.bin`、可选的 OHOS `cli/bin/{ohos_cli_binary_name}`，以及 `cli/changelog/`",
+        "- C-API: `capi/include/tswn_capi.h`、`capi/lib/`（包含 Windows DLL、Windows staticlib `.lib` 与现有 Linux `.so`）以及 `capi/changelog/`",
+        f"- Openbox: GUI `openbox/bin/{openbox_binary_name}`、CLI `openbox/bin/{openbox_cli_binary_name}`、可选的 Linux `openbox/bin/tswn_openbox_alpha_*.bin`，以及 `openbox/changelog/`",
+        "- Python: `py/dist/*.whl`、`py/examples/` 与 `py/changelog/`",
+        "- WASM: `wasm/pkg/tswn_wasm.js`、`wasm/pkg/tswn_wasm_bg.wasm`、`wasm/examples/` 与 `wasm/changelog/`",
+        "",
+        "## 说明",
+        "",
+        "- `capi/`、`cli/`、`openbox/` 与 `wasm/` 可以现场构建。",
+        "- 若仓库里已经存在 Linux `so` / `tswn-cli` / `tswn_openbox` 产物，聚合包也会一并收集。",
+        "- OHOS CLI 需要显式传 `--include-ohos-cli`，并通过 `--ohos-sdk` 或 `OHOS_NATIVE_SDK` 指定 OpenHarmony native SDK。",
+        "- `py/` 只收集与当前 `tswn_py` 版本一致的现有产物，不现场构建。",
+        "- `wasm/` 依赖本机可用的 `wasm-bindgen-cli`。",
+        "- 最终 zip 为整个 bundle 目录的压缩包。",
+        "",
+    ]
+
+    path = bundle_dir / "README.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def write_root_manifest(
+    bundle_dir: Path,
+    args: argparse.Namespace,
+    enabled: list[str],
+    skipped: list[str],
+    zip_path: Path,
+) -> None:
+    lines = [
+        "# tswn bundle manifest",
+        "",
+        f"bundle={bundle_dir.name}",
+        f"profile={'release' if args.release else 'debug'}",
+        f"target={args.target or ''}",
+        f"platform={platform.platform()}",
+        f"python={sys.version.split()[0]}",
+        "",
+        "[enabled]",
+    ]
+    if enabled:
+        lines.extend(enabled)
+    else:
+        lines.append("(none)")
+
+    lines += [
+        "",
+        "[skipped]",
+    ]
+    if skipped:
+        lines.extend(skipped)
+    else:
+        lines.append("(none)")
+
+    lines += [
+        "",
+        "[archive]",
+        zip_path.name,
+        "",
+    ]
+
+    path = bundle_dir / "MANIFEST.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[write] {path}")
+
+
+def make_zip(bundle_dir: Path, zip_path: Path) -> Path:
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    base_name = zip_path.with_suffix("")
+    archive = shutil.make_archive(
+        base_name=str(base_name),
+        format="zip",
+        root_dir=str(bundle_dir.parent),
+        base_dir=bundle_dir.name,
+    )
+    final_path = Path(archive)
+    print(f"[zip] {final_path}")
+    return final_path
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+
+    output_dir = Path(args.output_dir).resolve()
+    bundle_name = args.bundle_name or default_bundle_name()
+    bundle_dir = output_dir / bundle_name
+    zip_path = output_dir / f"{bundle_name}.zip"
+
+    print(f"[build] root     : {ROOT}")
+    print(f"[build] output   : {output_dir}")
+    print(f"[build] bundle   : {bundle_dir}")
+    print(f"[build] zip      : {zip_path}")
+    print(f"[build] profile  : {'release' if args.release else 'debug'}")
+    print(f"[build] target   : {args.target or '(default)'}")
+    if args.include_ohos_cli:
+        print(f"[build] ohos     : {args.ohos_target}")
+    print()
+
+    if args.clean:
+        if bundle_dir.exists():
+            print(f"[clean] 清空 {bundle_dir}")
+            remove_tree(bundle_dir)
+        if zip_path.exists():
+            print(f"[clean] 删除 {zip_path}")
+            zip_path.unlink()
+
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    enabled: list[str] = []
+    skipped: list[str] = []
+
+    if args.skip_capi:
+        skipped.append("capi")
+    else:
+        capi_dir = bundle_dir / "capi"
+        build_capi(capi_dir, args)
+        package_component_changelog(capi_dir, changelog_src=CAPI_CHANGELOG)
+        enabled.append("capi")
+
+    if args.skip_cli:
+        skipped.append("cli")
+    else:
+        cli_dir = bundle_dir / "cli"
+        binary_path, support_files = build_cli(
+            dst_dir=cli_dir,
+            release=args.release,
+            target=args.target,
+            cli_features=args.cli_features,
+            extra_cargo=args.cargo,
+            pgo=args.pgo,
+            pgo_train_runs=args.pgo_train_runs,
+        )
+        ohos_binary_path: Path | None = None
+        if args.include_ohos_cli:
+            ohos_sdk_value = args.ohos_sdk or os.environ.get("OHOS_NATIVE_SDK")
+            if not ohos_sdk_value:
+                raise RuntimeError("构建 OHOS CLI 需要传 --ohos-sdk 或设置 OHOS_NATIVE_SDK")
+            ohos_binary_path = build_ohos_cli(
+                dst_dir=cli_dir,
+                target=args.ohos_target,
+                native_sdk=Path(ohos_sdk_value),
+                cli_features=args.ohos_cli_features,
+                extra_cargo=args.cargo,
+            )
+        package_component_changelog(
+            cli_dir,
+            changelog_src=CORE_CHANGELOG,
+            update_doc_src=RELEASE_DOCS_DIR / f"{tswn_core_version()}.md",
+        )
+        write_cli_readme(
+            cli_dir,
+            binary_path=binary_path,
+            support_files=support_files,
+            ohos_binary_path=ohos_binary_path,
+        )
+        write_cli_manifest(
+            cli_dir,
+            release=args.release,
+            target=args.target,
+            binary_path=binary_path,
+            support_files=support_files,
+            ohos_binary_path=ohos_binary_path,
+            ohos_target=args.ohos_target if args.include_ohos_cli else None,
+        )
+        enabled.append("cli")
+
+    if args.skip_openbox:
+        skipped.append("openbox")
+    else:
+        openbox_dir = bundle_dir / "openbox"
+        binary_path, cli_binary_path, support_files = build_openbox(
+            dst_dir=openbox_dir,
+            release=args.release,
+            target=args.target,
+            openbox_features=args.openbox_features,
+            extra_cargo=args.cargo,
+            pgo=args.pgo,
+            pgo_train_runs=args.pgo_openbox_train_runs,
+        )
+        package_component_changelog(openbox_dir, changelog_src=OPENBOX_CHANGELOG)
+        write_openbox_readme(openbox_dir, binary_path=binary_path, cli_binary_path=cli_binary_path, support_files=support_files)
+        write_openbox_manifest(
+            openbox_dir,
+            release=args.release,
+            target=args.target,
+            binary_path=binary_path,
+            cli_binary_path=cli_binary_path,
+            support_files=support_files,
+        )
+        enabled.append("openbox")
+
+    if args.skip_py:
+        skipped.append("py")
+    else:
+        py_dir = bundle_dir / "py"
+        copied_files, copied_dirs, source_hits = collect_py_artifacts(py_dir)
+        write_py_readme(py_dir, copied_files=copied_files, copied_dirs=copied_dirs)
+        write_py_manifest(py_dir, source_hits=source_hits)
+        enabled.append("py")
+
+    if args.skip_wasm:
+        skipped.append("wasm")
+    else:
+        wasm_dir = bundle_dir / "wasm"
+        build_wasm(wasm_dir, args)
+        package_component_changelog(wasm_dir, changelog_src=WASM_CHANGELOG)
+        enabled.append("wasm")
+
+    write_root_readme(bundle_dir, enabled=enabled, skipped=skipped)
+    write_root_manifest(
+        bundle_dir,
+        args=args,
+        enabled=enabled,
+        skipped=skipped,
+        zip_path=zip_path,
+    )
+
+    final_zip = make_zip(bundle_dir, zip_path)
+
+    print()
+    print(f"[ok] bundle 目录：{bundle_dir}")
+    print(f"[ok] zip 文件   ：{final_zip}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,274 @@
+//! Axum HTTP 路由、静态页面和应用错误的 JSON 映射。
+//!
+//! Router 通过 Arc 共享 AppService，结果/进度查询与重算排队分离。靶子生成和手动
+//! 胜率计算移交 spawn_blocking，部分同步校验仍在请求线程执行。
+//! 此层无认证，业务错误统一返回 500；监听范围和外部访问控制由部署方负责。
+
+use std::sync::Arc;
+
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde_json::json;
+use tower_http::services::ServeDir;
+
+use crate::model::{
+    AddGroupsRequest, AddWinratesRequest, BlockGroupRequest, BlockGroupsByTextRequest, ConstrainedSelectionRequest,
+    MergeTeamsRequest, RecomputeLaneRequest, TargetGenerationRequest,
+};
+use crate::service::AppService;
+
+pub type SharedService = Arc<AppService>;
+
+pub fn router(service: AppService) -> Router {
+    let shared = Arc::new(service);
+
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/groups/add", post(add_groups))
+        .route("/api/winrates/add", post(add_winrates))
+        .route("/api/groups/block", post(block_groups_by_text))
+        .route("/api/groups/unblock", post(unblock_groups_by_text))
+        .route("/api/groups/{group_id}/block", post(block_group))
+        .route("/api/groups/{group_id}/unblock", post(unblock_group))
+        .route("/api/teams/merge", post(merge_teams))
+        .route("/api/lanes", get(lanes))
+        .route("/api/lanes/{lane_size}/results", get(lane_results))
+        .route("/api/lanes/{lane_size}/progress", get(lane_progress))
+        .route("/api/lanes/{lane_size}/recompute", post(recompute_lane))
+        .route("/api/lanes/{lane_size}/constrained-selection", post(constrained_selection))
+        .route("/api/lanes/{lane_size}/calibration", post(calibration))
+        .route("/api/lanes/{lane_size}/targets", post(generate_targets))
+        .route("/api/lanes/{lane_size}/pair-validation", post(pair_validation))
+        .route("/api/jobs/{job_id}", get(job))
+        .nest_service("/", ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static")))
+        .with_state(shared)
+}
+
+async fn health() -> Json<serde_json::Value> { Json(json!({ "ok": true })) }
+
+async fn add_groups(
+    State(service): State<SharedService>,
+    Json(req): Json<AddGroupsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.add_groups(req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn add_winrates(
+    State(service): State<SharedService>,
+    Json(req): Json<AddWinratesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let service_for_task = service.clone();
+    let response = tokio::task::spawn_blocking(move || service_for_task.add_manual_winrates(req))
+        .await
+        .map_err(|err| anyhow::anyhow!("manual winrate task join error: {err}"))??;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn block_groups_by_text(
+    State(service): State<SharedService>,
+    Json(req): Json<BlockGroupsByTextRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.set_groups_blocked_by_text(true, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn unblock_groups_by_text(
+    State(service): State<SharedService>,
+    Json(req): Json<BlockGroupsByTextRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.set_groups_blocked_by_text(false, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn block_group(
+    State(service): State<SharedService>,
+    Path(group_id): Path<i64>,
+    Json(req): Json<BlockGroupRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.set_group_blocked(group_id, true, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn unblock_group(
+    State(service): State<SharedService>,
+    Path(group_id): Path<i64>,
+    Json(req): Json<BlockGroupRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.set_group_blocked(group_id, false, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn merge_teams(
+    State(service): State<SharedService>,
+    Json(req): Json<MergeTeamsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = service.merge_teams(req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn recompute_lane(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let req = if body.is_empty() {
+        RecomputeLaneRequest {
+            stickiness: None,
+            outer_workers: None,
+            inner_workers: None,
+            skip_archived: None,
+        }
+    } else {
+        serde_json::from_slice::<RecomputeLaneRequest>(&body)?
+    };
+
+    if matches!(req.stickiness, Some(0)) {
+        return Err(anyhow::anyhow!("stickiness must be a positive integer").into());
+    }
+
+    let response = service.queue_recompute_lane(
+        lane_size,
+        req.stickiness,
+        req.outer_workers,
+        req.inner_workers,
+        req.skip_archived,
+    )?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn constrained_selection(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let req = if body.is_empty() {
+        ConstrainedSelectionRequest {
+            outer_workers: None,
+            inner_workers: None,
+            raw_score_threshold: None,
+            cqd_threshold: None,
+        }
+    } else {
+        serde_json::from_slice::<ConstrainedSelectionRequest>(&body)?
+    };
+
+    let response = service.queue_constrained_selection_lane(lane_size, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn calibration(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let req = if body.is_empty() {
+        ConstrainedSelectionRequest {
+            outer_workers: None,
+            inner_workers: None,
+            raw_score_threshold: None,
+            cqd_threshold: None,
+        }
+    } else {
+        serde_json::from_slice::<ConstrainedSelectionRequest>(&body)?
+    };
+
+    let response = service.queue_constrained_selection_lane(lane_size, req)?;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn generate_targets(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+    Json(req): Json<TargetGenerationRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let service_for_task = service.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        let result = service_for_task.generate_lane_targets(lane_size, req);
+        if let Err(err) = &result {
+            let group_count = service_for_task.db.lane_results(lane_size).map(|rows| rows.len()).unwrap_or(0);
+            let _ = service_for_task.db.set_lane_status(lane_size, "error", group_count);
+            let _ = service_for_task.db.set_lane_progress(
+                lane_size,
+                "target_generation_error",
+                0,
+                1,
+                0,
+                0,
+                0,
+                &format!("target generation failed: {err:#}"),
+            );
+        }
+        result
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("target generation task join error: {err}"))??;
+    Ok(Json(serde_json::to_value(response)?))
+}
+
+async fn pair_validation(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let req = if body.is_empty() {
+        ConstrainedSelectionRequest {
+            outer_workers: None,
+            inner_workers: None,
+            raw_score_threshold: None,
+            cqd_threshold: None,
+        }
+    } else {
+        serde_json::from_slice::<ConstrainedSelectionRequest>(&body)?
+    };
+
+    let response = service.validate_pair_strength_lane(lane_size, req)?;
+    Ok(Json(response))
+}
+
+async fn lanes(State(service): State<SharedService>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::to_value(service.db.lane_statuses()?)?))
+}
+
+async fn lane_results(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::to_value(service.db.lane_results(lane_size)?)?))
+}
+
+async fn lane_progress(
+    State(service): State<SharedService>,
+    Path(lane_size): Path<usize>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::to_value(service.db.lane_progress(lane_size)?)?))
+}
+
+async fn job(State(service): State<SharedService>, Path(job_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::to_value(service.db.job(job_id)?)?))
+}
+
+#[derive(Debug)]
+pub struct ApiError(anyhow::Error);
+
+impl<E> From<E> for ApiError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self { Self(err.into()) }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let body = Json(json!({
+            "error": self.0.to_string()
+        }));
+        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+    }
+}

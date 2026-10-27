@@ -1,0 +1,450 @@
+//! 输入读取、参数校验和文本切分 helper。
+//!
+//! 这些函数看起来都很小，但它们决定了 CLI 在三个关键边界上的行为：
+//! - 用户到底是从命令行、文件还是 stdin 提供数据；
+//! - 哪些参数组合应该尽早报错；
+//! - 文本文件中的每一行如何被解释成“一个名字”或“一整组名字”。
+//!
+//! 把这一层从命令树定义里拆开后，后续调整输入规则时就不需要在几百行 `clap`
+//! 声明之间来回定位辅助函数。
+
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
+use clap::CommandFactory;
+use clap::error::ErrorKind;
+
+use super::cli::Cli;
+use super::parsed::{NamerPfMetric, NamerPfMetricSpec};
+
+/// 从标准输入读取完整的 namerena 原始输入。
+///
+/// CLI 的 `fight` / `bench auto` / `namer-pf` 都允许省略 `--raw` 和 `--file`，
+/// 此时这里就是最终兜底。读取完成后会统一去掉 UTF-8 BOM，并拒绝纯空白输入。
+pub(super) fn read_stdin() -> Result<String, clap::Error> {
+    let mut raw = String::new();
+    io::stdin()
+        .read_to_string(&mut raw)
+        .map_err(|err| cli_error(format!("读取 stdin 失败: {err}")))?;
+    let raw = strip_utf8_bom(&raw).to_string();
+    if raw.trim().is_empty() {
+        return Err(cli_error("未提供 raw_namerena 输入"));
+    }
+    Ok(raw)
+}
+
+/// 从指定文件读取完整文本输入，并统一处理 BOM。
+pub(super) fn read_file(path: &Path) -> Result<String, clap::Error> {
+    let content = fs::read_to_string(path).map_err(|err| cli_error(format!("读取文件失败: {err}")))?;
+    Ok(strip_utf8_bom(&content).to_string())
+}
+
+/// 将命令行里的字面量 `\n` 还原成真实换行。
+///
+/// 这允许用户在 shell 中直接写一条短 raw，而不必专门准备文件。
+pub(super) fn decode_raw(raw: &str) -> String { raw.replace("\\n", "\n") }
+
+/// 解析并校验 benchmark 线程数参数。
+pub(super) fn parse_thread_count(raw: &str) -> Result<usize, String> {
+    let value = raw.parse::<usize>().map_err(|_| "线程数必须是正整数".to_string())?;
+    if value == 0 {
+        Err("线程数必须大于 0".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+/// 解析严格大于 0 的整数。
+pub(super) fn parse_positive_usize(raw: &str) -> Result<usize, String> {
+    let value = raw.parse::<usize>().map_err(|_| "参数必须是正整数".to_string())?;
+    if value == 0 {
+        Err("参数必须大于 0".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+/// 解析并校验百分比阈值参数 (0~100)。
+pub(super) fn parse_percent_0_100(raw: &str) -> Result<f64, String> {
+    let value = raw.parse::<f64>().map_err(|_| "阈值必须是 0~100 之间的数字".to_string())?;
+    if !(0.0..=100.0).contains(&value) {
+        Err("阈值必须在 0~100 之间".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+/// 解析有限的非负浮点阈值。
+///
+/// 接受零与负零；拒绝 NaN、无穷和解析时溢出的数值，避免后续大小比较静默失效。
+pub(super) fn parse_non_negative_f64(raw: &str) -> Result<f64, String> {
+    let value = raw.parse::<f64>().map_err(|_| "阈值必须是非负数字".to_string())?;
+    if !value.is_finite() {
+        Err("阈值必须是有限非负数字".to_string())
+    } else if value < 0.0 {
+        Err("阈值必须不小于 0".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+/// 解析胜率输出的小数位数。
+pub(super) fn parse_wr_precision(raw: &str) -> Result<usize, String> {
+    let value = raw.parse::<usize>().map_err(|_| "小数位数必须是 0~9 之间的整数".to_string())?;
+    if value > 9 {
+        Err("小数位数必须在 0~9 之间".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+/// 构造统一风格的 CLI 参数校验错误。
+///
+/// 把错误构造集中在这里，是为了保证所有手写校验都以和 `clap` 原生错误一致的形式输出。
+pub(super) fn cli_error(message: impl Into<String>) -> clap::Error {
+    Cli::command().error(ErrorKind::ValueValidation, message.into())
+}
+
+/// 去除 UTF-8 BOM (U+FEFF) 前缀。
+pub(super) fn strip_utf8_bom(s: &str) -> &str { s.strip_prefix('\u{feff}').unwrap_or(s) }
+
+/// 解析 `to-diy --file` 输入。
+///
+/// 文件模式按“每行一个名字”解释；空行会被忽略，但若最后没有任何有效名字则直接报错。
+pub(super) fn parse_to_diy_file_names(content: &str) -> Result<Vec<String>, clap::Error> {
+    let names = parse_line_list(content);
+    if names.is_empty() {
+        Err(cli_error("to-diy 文件中没有有效名字"))
+    } else {
+        Ok(names)
+    }
+}
+
+/// 解析“每个非空行是一项”的纯行列表。
+pub(super) fn parse_line_list(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// 解析“每个非空行都是一个 `+` 分隔组”的文件内容。
+///
+/// 返回转换后的 namerena 组字符串列表，组内成员之间用 `\n` 分隔。
+/// 这是 `bench batch-rate` / `bench pair` 的靶子列表和部分玩家列表的标准格式。
+/// `double_plus=true` 时组内分隔符改成 `++`，避免拆开名字里的 `+diy[...]` /
+/// `+ol:...`。
+pub(super) fn parse_plus_separated_groups(content: &str, double_plus: bool) -> Vec<String> {
+    let separator = if double_plus { "++" } else { "+" };
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| parse_group_line(line, separator))
+        .collect()
+}
+
+/// 解析 `namer-pf --metric` 的单项规格。
+///
+/// 语法为 `NAME[:MIN_SCREEN[:FILE[:MIN_FILE]]]`，空段表示跳过该可选项，
+/// 例如 `pp::pp.txt` 表示无屏幕阈值但写入 `pp.txt`。
+///
+/// FILE 段按“最后一段是可解析数字才算 MIN_FILE”的规则回切，因此 Windows 的
+/// `C:\dir\out.txt` 这类带盘符冒号的路径不会被切碎。阈值必须有限且非负；
+/// 除开头盘符的冒号外，FILE 中的其他冒号一律拒绝，UNC 路径不受影响。
+pub(super) fn parse_metric_spec(raw: &str) -> Result<NamerPfMetricSpec, String> {
+    let mut segments = raw.split(':');
+    let name = segments.next().unwrap_or_default().trim();
+    let metric = match name.to_ascii_lowercase().as_str() {
+        "pp" => NamerPfMetric::Pp,
+        "pd" => NamerPfMetric::Pd,
+        "qp" => NamerPfMetric::Qp,
+        "qd" => NamerPfMetric::Qd,
+        "sum" => NamerPfMetric::Sum,
+        _ => return Err(format!("评分项 NAME 必须是 pp/pd/qp/qd/sum 之一，当前为: {name}")),
+    };
+    let min_screen = match segments.next() {
+        Some(segment) if !segment.trim().is_empty() => Some(parse_non_negative_f64(segment.trim())?),
+        _ => None,
+    };
+    let mut rest = segments.collect::<Vec<_>>();
+    if rest.len() > 1 && rest.last().is_some_and(|segment| segment.trim().is_empty()) {
+        rest.pop();
+    }
+    let min_file = if rest.len() >= 2 && rest.last().is_some_and(|segment| segment.trim().parse::<f64>().is_ok()) {
+        let raw_min_file = rest.pop().expect("至少两段时才回切");
+        Some(parse_non_negative_f64(raw_min_file.trim())?)
+    } else {
+        None
+    };
+    let output_file = (!rest.is_empty()).then(|| PathBuf::from(rest.join(":").trim()));
+    if let Some(path) = output_file.as_ref()
+        && path_has_illegal_colon(path)
+    {
+        return Err(format!(
+            "输出文件路径不能包含 ':'（Windows 盘符前缀如 C:\\ 除外）: {}",
+            path.display()
+        ));
+    }
+    Ok(NamerPfMetricSpec {
+        metric,
+        min_screen,
+        output_file,
+        min_file,
+    })
+}
+
+/// 判断路径里的 `:` 是否非法。
+///
+/// 冒号分段语法要求 FILE 段本身不含冒号，唯一例外是 Windows 盘符前缀
+/// （`C:\dir\out.txt`）；ADS 等其他含冒号路径一律拒绝，避免和语法混淆。
+fn path_has_illegal_colon(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    let mut chars = raw.chars();
+    let is_drive = matches!((chars.next(), chars.next()), (Some(letter), Some(':')) if letter.is_ascii_alphabetic());
+    if is_drive {
+        chars.as_str().contains(':')
+    } else {
+        raw.contains(':')
+    }
+}
+
+/// 解析带权靶子 TOML。每个 `[[targets]]` 项包含正数 `factor` 和非空 `players` 数组。
+pub(super) fn parse_factored_target_groups(content: &str) -> Result<(Vec<String>, Vec<f64>), clap::Error> {
+    let table = toml::from_str::<toml::Table>(content).map_err(|err| cli_error(format!("带权靶子 TOML 解析失败: {err}")))?;
+    let entries = table
+        .get("targets")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| cli_error("带权靶子 TOML 必须包含 targets 数组"))?;
+    if entries.is_empty() {
+        return Err(cli_error("带权靶子 TOML 中的 targets 不能为空"));
+    }
+
+    let mut groups = Vec::with_capacity(entries.len());
+    let mut factors = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let factor = match entry.get("factor") {
+            Some(toml::Value::Float(value)) => *value,
+            Some(toml::Value::Integer(value)) => *value as f64,
+            _ => return Err(cli_error(format!("带权靶子 targets[{index}].factor 必须是数字"))),
+        };
+        if !factor.is_finite() || factor <= 0.0 {
+            return Err(cli_error(format!("带权靶子 targets[{index}].factor 必须是有限正数")));
+        }
+        let players = entry
+            .get("players")
+            .and_then(toml::Value::as_array)
+            .ok_or_else(|| cli_error(format!("带权靶子 targets[{index}].players 必须是数组")))?;
+        let mut names = Vec::with_capacity(players.len());
+        for player in players {
+            let name = player
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| cli_error(format!("带权靶子 targets[{index}].players 不能为空或包含空名字")))?;
+            names.push(name.to_string());
+        }
+        if names.is_empty() {
+            return Err(cli_error(format!("带权靶子 targets[{index}].players 不能为空")));
+        }
+        groups.push(names.join("\n"));
+        factors.push(factor);
+    }
+    Ok((groups, factors))
+}
+
+/// 解析 `bench win-rate` 的两队输入。
+///
+/// 输入中每个非空行是一队；默认队内用 `+` 分隔，`double_plus=true` 时改用 `++` 分隔。
+pub(super) fn parse_win_rate_teams(content: &str, double_plus: bool) -> Result<(String, String), clap::Error> {
+    let separator = if double_plus { "++" } else { "+" };
+    let teams = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| parse_group_line(line, separator))
+        .collect::<Vec<_>>();
+
+    match teams.as_slice() {
+        [team1, team2] => Ok((team1.clone(), team2.clone())),
+        _ => Err(cli_error(format!(
+            "bench win-rate 需要恰好两队输入，当前解析到 {} 队；格式示例: -r \"1@a+2@a\\n3@b+4@b\"",
+            teams.len()
+        ))),
+    }
+}
+
+/// 与 `parse_plus_separated_groups` 相同，但会额外保留每行原始文本作为展示标签。
+///
+/// `double_plus=true` 时，组内分隔符改成 `++`，用来避免把玩家名字里的 `+diy[...]`
+/// 或 `+ol:...` 误切开。返回的 groups 与 labels 等长，展示标签保留去除首尾空白后的整行文本。
+pub(super) fn parse_player_groups_with_labels(content: &str, double_plus: bool) -> (Vec<String>, Vec<String>) {
+    let mut groups = Vec::new();
+    let mut labels = Vec::new();
+    let separator = if double_plus { "++" } else { "+" };
+    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        labels.push(line.to_string());
+        groups.push(parse_group_line(line, separator));
+    }
+    (groups, labels)
+}
+
+fn parse_group_line(line: &str, separator: &str) -> String { line.split(separator).map(str::trim).collect::<Vec<_>>().join("\n") }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_groups_default_split_uses_single_plus() {
+        let (groups, labels) = parse_player_groups_with_labels("aaaa+bbbb", false);
+        assert_eq!(groups, vec!["aaaa\nbbbb".to_string()]);
+        assert_eq!(labels, vec!["aaaa+bbbb".to_string()]);
+    }
+
+    #[test]
+    fn player_groups_double_plus_keeps_diy_plus_inside_player() {
+        let diy = r#"aaaa+diy[58,87,82,78,89,93,99,343]{"skldefend":13}"#;
+        let raw = format!("{diy}++bbbb");
+        let (groups, labels) = parse_player_groups_with_labels(&raw, true);
+
+        assert_eq!(groups, vec![format!("{diy}\nbbbb")]);
+        assert_eq!(labels, vec![raw]);
+    }
+
+    #[test]
+    fn factored_target_groups_parse_players_and_weights() {
+        let raw = "[[targets]]\nfactor = 2\nplayers = [\"a\", \"b\"]\n\n[[targets]]\nfactor = 0.5\nplayers = [\"c\"]";
+        let (groups, factors) = parse_factored_target_groups(raw).unwrap();
+        assert_eq!(groups, vec!["a\nb", "c"]);
+        assert_eq!(factors, vec![2.0, 0.5]);
+    }
+
+    #[test]
+    fn win_rate_teams_default_split_uses_single_plus() {
+        let (team1, team2) = parse_win_rate_teams("1@a+2@a\n3@b+4@b", false).unwrap();
+        assert_eq!(team1, "1@a\n2@a");
+        assert_eq!(team2, "3@b\n4@b");
+    }
+
+    #[test]
+    fn win_rate_teams_double_plus_keeps_plus_inside_player() {
+        let diy = r#"aaaa+diy[58,87,82,78,89,93,99,343]{"skldefend":13}"#;
+        let raw = format!("{diy}++bbbb\ncccc++dddd");
+        let (team1, team2) = parse_win_rate_teams(&raw, true).unwrap();
+
+        assert_eq!(team1, format!("{diy}\nbbbb"));
+        assert_eq!(team2, "cccc\ndddd");
+    }
+
+    #[test]
+    fn win_rate_teams_rejects_wrong_team_count() {
+        assert!(parse_win_rate_teams("aaaa", false).is_err());
+        assert!(parse_win_rate_teams("aaaa\nbbbb\ncccc", false).is_err());
+    }
+
+    #[test]
+    fn to_diy_file_names_skip_blank_lines() {
+        assert_eq!(
+            parse_to_diy_file_names("aaaa\n\n bbbb@team \r\n").unwrap(),
+            vec!["aaaa".to_string(), "bbbb@team".to_string()]
+        );
+    }
+
+    #[test]
+    fn to_diy_file_names_reject_empty_file() {
+        assert!(parse_to_diy_file_names("\n \r\n").is_err());
+    }
+
+    #[test]
+    fn plus_groups_double_plus_keeps_overlay_suffix() {
+        assert_eq!(parse_plus_separated_groups("a+b", false), vec!["a\nb".to_string()]);
+        let diy = r#"aaaa+diy[58,87,82,78,89,93,99,343]{"skldefend":13}"#;
+        assert_eq!(
+            parse_plus_separated_groups(&format!("{diy}++bbbb"), true),
+            vec![format!("{diy}\nbbbb")]
+        );
+    }
+
+    #[test]
+    fn metric_spec_parses_name_only() {
+        let spec = parse_metric_spec("pp").unwrap();
+        assert_eq!(spec.metric, NamerPfMetric::Pp);
+        assert_eq!(spec.min_screen, None);
+        assert_eq!(spec.output_file, None);
+        assert_eq!(spec.min_file, None);
+    }
+
+    #[test]
+    fn metric_spec_parses_all_four_segments() {
+        let spec = parse_metric_spec("sum:30000:out.txt:25000").unwrap();
+        assert_eq!(spec.metric, NamerPfMetric::Sum);
+        assert_eq!(spec.min_screen, Some(30000.0));
+        assert_eq!(spec.output_file, Some(PathBuf::from("out.txt")));
+        assert_eq!(spec.min_file, Some(25000.0));
+    }
+
+    #[test]
+    fn metric_spec_allows_empty_middle_segment() {
+        let spec = parse_metric_spec("qp::qp.txt").unwrap();
+        assert_eq!(spec.metric, NamerPfMetric::Qp);
+        assert_eq!(spec.min_screen, None);
+        assert_eq!(spec.output_file, Some(PathBuf::from("qp.txt")));
+        assert_eq!(spec.min_file, None);
+    }
+
+    #[test]
+    fn metric_spec_keeps_windows_drive_letter_in_file() {
+        let spec = parse_metric_spec(r"pd::C:\scores\pd.txt").unwrap();
+        assert_eq!(spec.output_file, Some(PathBuf::from(r"C:\scores\pd.txt")));
+        let spec = parse_metric_spec(r"pd:8000:C:\scores\pd.txt:7000").unwrap();
+        assert_eq!(spec.metric, NamerPfMetric::Pd);
+        assert_eq!(spec.min_screen, Some(8000.0));
+        assert_eq!(spec.output_file, Some(PathBuf::from(r"C:\scores\pd.txt")));
+        assert_eq!(spec.min_file, Some(7000.0));
+    }
+
+    #[test]
+    fn non_negative_thresholds_reject_non_finite_values() {
+        for raw in ["NaN", "inf", "+inf", "-inf", "1e999"] {
+            assert!(parse_non_negative_f64(raw).is_err(), "应拒绝非有限阈值: {raw}");
+            assert!(parse_metric_spec(&format!("pp:{raw}")).is_err());
+            assert!(parse_metric_spec(&format!("pp::out.txt:{raw}")).is_err());
+        }
+        for raw in ["0", "-0", "0.5", "1e100"] {
+            assert!(parse_non_negative_f64(raw).is_ok(), "应接受有限非负阈值: {raw}");
+        }
+    }
+
+    #[test]
+    fn metric_spec_rejects_extra_colons_after_drive_prefix() {
+        for raw in [
+            r"pp::C:\scores\out.txt:stream",
+            r"pp::C:\scores\out.txt:stream:1",
+            "pp::out.txt:stream",
+        ] {
+            assert!(parse_metric_spec(raw).is_err(), "应拒绝路径中的额外冒号: {raw}");
+        }
+        assert!(parse_metric_spec(r"pp::C:\scores\out.txt").is_ok());
+        assert!(parse_metric_spec(r"pp::C:\scores\out.txt:1").is_ok());
+    }
+
+    #[test]
+    fn metric_spec_rejects_unknown_name() {
+        assert!(parse_metric_spec("xp").is_err());
+    }
+
+    #[test]
+    fn metric_spec_rejects_negative_threshold() {
+        assert!(parse_metric_spec("pp:-1").is_err());
+    }
+
+    #[test]
+    fn metric_spec_rejects_non_numeric_threshold() {
+        assert!(parse_metric_spec("pp:abc").is_err());
+        assert!(parse_metric_spec("pp:8000:out.txt:abc").is_err());
+    }
+}

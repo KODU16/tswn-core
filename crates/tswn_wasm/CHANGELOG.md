@@ -1,0 +1,694 @@
+# 更新日志
+
+## [0.5.12] - 2026-10-17
+
+### 变更
+
+- 右下角控制栏换图标：编辑（打开输入面板）按钮改用原先「从头开始」按钮的循环箭头图标；从头开始播放按钮改用「快退」图标（三个向左的三角形），与极速（三个向右）对称。按钮功能与快捷键（`I` / `R`）不变，`R` 的说明统一为「从头开始播放」。
+
+### 验证
+
+- `node --test crates/tswn_wasm/tests/show-*.test.mjs` 43 项通过、`scripts/verify_web_playback.mjs` 8 组通过（图标改动不影响按键行为）。
+- 真实浏览器截图核对控制栏：编辑按钮为循环箭头，从头开始按钮为三向左三角，其余按钮图标不变。
+
+## [0.5.11] - 2026-10-17
+
+### 变更
+
+- 正文里两条条形各按自己的变化出现：只有护盾变化时**只画盾条**，并直接占用体力条的位置（`.actor-vitals` 默认槽位，不再强配当前 HP 底轨）；体力与护盾同时变化时才叠放——体力条在下、盾条紧贴其上（`.has-shield.has-hp`）。原先只要盾条出现就会同时画出体力条。
+- 行高留白只在叠放时保留（`.actor-token.has-shield.has-hp { margin-top: 4px }`），单盾条不再额外上移。
+
+### 验证
+
+- `node --test crates/tswn_wasm/tests/show-*.test.mjs` 43 项通过；新增用例分别覆盖「只有护盾变化 → 无 `has-hp`、无 `.actor-hp`、盾条独占 `.actor-vitals`」「体力与护盾同时变化 → `has-hp has-shield` 且 DOM 顺序 hp → shield」「单盾条落在 `.actor-vitals` 默认槽位、叠放时容器上移两条之和」。
+- `scripts/verify_web_playback.mjs` 8 组页面行为通过；验收截图与示例说明同步为 0.5.11 口径。
+
+## [0.5.10] - 2026-10-17
+
+### 修复
+
+- 左侧玩家列表改为按**输入顺序**排列：分组与 `Team N` 标签使用 `input_team_index`（输入里第几组），组内按对象 id 排列。此前按运行时 `team_index` 排序，而运行时分队号与输入分组相反（输入的第一组常被判为 team 1），列表顺序与输入对不上。
+- 展示层把 `input_team_index` 一并带入玩家对象（`show-wasm.js` 之前只保留运行时 `team_index`）；缺失该字段的旧数据退回运行时分队号，召唤单位继续紧跟其主人。
+- 布局键改用输入分组序号，换组时能重建整张表；`displayGroupIndex()` 先判空再判有限性，避免 `Number(null) === 0` 把「无输入序号」误判成第 1 组。
+
+### 兼容性
+
+- 只调整 WASM 展示层的排序与分组：`team_index`、`input_team_index` 字段、core 战斗规则、胜负判定与 Python／C 绑定契约都不变。
+
+### 验证
+
+- `node --test crates/tswn_wasm/tests/show-*.test.mjs` 42 项通过；新增 `show-order.test.mjs` 覆盖「按输入顺序排列且与运行时分队号无关」「缺字段退回运行时分队号」「召唤单位紧随主人」「换组重建整表且布局键含输入分组序号」。
+- `scripts/verify_web_playback.mjs` 8 组页面行为通过。
+- 真实页面用 `z_last/a_first` + `m_third/b_second` 两组输入核对：列表顺序与输入一致，标签为 `Team 1` / `Team 2`。
+
+## [0.5.9] - 2026-10-13
+
+### 变更
+
+- 盾条改用 `feat/wasm-shield-proficiency` 分支的整体外观与显示时机，替换 0.5.7 的加粗拼接条方案：
+  - 位置：正文里从「接在体力条右端」改为叠在体力条正上方——竖排（`column-reverse`）、左端对齐、上下紧贴不重叠，容器上移量等于两条高度之和。
+  - 粗细与描边：回到 2px 平条，去掉 4px 高度、主题描边、圆角与高光；侧栏盾条与血条间距回到 1px。
+  - 显示时机：正文盾条只在护盾变化（或新角色带盾出现）时绘制，不再为每个有熟练度的角色常驻空条；侧栏在当前与上一片段的盾值都为 0 时保持隐藏。
+  - 尺度：满格取 `max_shield`，并与实际盾值取较大值——护盾叠到超过熟练度时由当前盾值撑开、完整显示，不再截断在熟练度内。
+  - 配色：浅色模式新增盾段用分支的深青 `#076a78`（原 `#005263`）。它与已有护盾填充的对比为 2.56:1，低于原先按拼接方案设的 3:1，因此把「与已有护盾区分」的下限记为 2.5:1，「与底轨可见」仍要求 3:1。
+- 消息 token 的行高留白随 2px 两条条形回到 4px；名字框不再用 `min-width` 为条形撑宽，短名字不会被拉出多余底色。
+
+### 兼容性
+
+- 显示口径只在 WASM 展示层调整：`max_shield` / `shield` 字段、core 战斗规则、Python 与 C 绑定契约都不变。
+
+### 验证
+
+- `node --test crates/tswn_wasm/tests/show-*.test.mjs` 38 项通过；用例覆盖熟练度定长、超过熟练度撑开、仅在变化时出现、空盾隐藏、叠放紧贴（由 CSS 值推导「盾条高 + 体力条高 = 容器上移量」）与行高留白。
+- `scripts/verify_web_playback.mjs` 8 组页面行为通过，含侧栏增量更新、破盾归零隐藏与正文 token 的 `has-shield` 结构。
+- 真实浏览器（隔离 Edge）量测：盾条与体力条左端同坐标、盾条 bottom 等于体力条 top（间隙 0px）。
+- 验收截图按新外观重新生成，见 [示例说明](examples/README.md#外观验收截图)。
+
+## [0.5.8] - 2026-10-13
+
+### 变更
+
+- 深色模式移除名字的 1px 内描边（侧栏 `.name`、正文 `.actor-name` 与阵亡名字），名字底色保持原有蓝灰 `#2c495d`；名字框只靠底色与页面区分，对比度仍满足既有主题回归阈值。
+
+### 验证
+
+- `node --test crates/tswn_wasm/tests/show-*.test.mjs` 37 项通过，含深色配色与浅色护盾区段的对比度回归。
+- `scripts/verify_web_playback.mjs` 页面行为验证与真实浏览器截图核对通过，深色模式截图为 `docs/images/wasm-show/shield-dark.png` 与 `shield-details.png`。
+
+## [0.5.7] - 2026-10-13
+
+### 新增
+
+- show 页面常驻显示有护盾技能角色的盾条，不再提供隐藏按钮、`B` 快捷键或持久化开关；旧隐藏偏好不影响显示。
+- 护盾剩余值在角色状态标签区和详情面板的「状态」中同步显示为 `护盾 +数值`，与其他正面状态并列；消耗时更新，破盾或死亡时移除数值标签。
+- `PlayerState` 与 TypeScript 声明新增 `shield` 字段，贯通初始、帧、片段前后与最终状态；旧回放缺省值按零处理。
+- 规范 `BattlePlayerState`、兼容 `PlayerState` 及跨语言声明新增 `max_shield`，取当前护盾技能熟练度，吞噬后随快照更新；盾条上限不再借用最大 HP。
+- show 页面声明原生 `color-scheme` 并通过 `darkreader-lock` 请求 Dark Reader 跳过二次转换；仍检测到本页 Dynamic 深色注入标记时显示提醒，标记移除后自动收起，不读取插件全局设置。
+
+### 变更
+
+- 深色模式为像素图标增加浅色衬底，保留原图颜色与深色轮廓；提高名字框、死亡名字和状态标签的对比度。
+- 右侧对战区的盾条与 HP 条同为 4px，并紧接 HP 底轨右侧；预留行高与横向宽度，避免压到文字或后续角色。仍按每 4 点 1px 展示新增/消耗区段。
+- 护盾超过熟练度时条形截在展示上限内，真实盾值与数值提示保留，不改变护盾吸收、生成或破盾规则；旧数据缺少上限时退回前后盾值。
+- show 页面脚本缓存版本更新为 `20261013c`。
+- show 样式按基础主题、角色、回放和面板拆分，通过原 `show.css` 按原始层叠顺序加载。
+- 将页面的播放控制、主题与悬浮高亮、详情渲染、共享类型说明从入口分离；各手写源文件不超过 1000 行，沿用同一会话状态和播放计划。
+- 前端回归从 `examples/` 移到独立 `tests/`，不进入示例分发；同一套 `node:test` 用例可由 Bun 或 Node 执行，无需额外 npm 依赖。
+- 删除仅扫描页面源码写法的维护约束测试，保留实际渲染、护盾更新、流式生命周期和主题对比度回归；目录与架构约定留在文档。
+
+### 修复
+
+- 浅色模式的新增护盾区段改为深青色，与底轨及已有护盾区段的对比度均不低于 3:1。
+- 角色详情复用侧栏的实时状态标签，修复只有侧栏显示护盾、详情「状态」遗漏护盾的问题。
+- 修复瘟疫成功后的百分比伤害句缺少右侧 HP 条的问题；条形变化使用实际扣血量，而非文本显示的百分比。
+- 护盾生成、消耗与破盾显示回合净变化，死亡投影为零；铁壁单次减伤阈值继续作为独立状态标签，战斗规则保持不变。
+
+### 依赖更新
+
+- `wasm-bindgen` 升级到 `0.2.129`，`js-sys` 升级到 `0.3.106`；JS／TypeScript 导出契约不变。
+
+### 验证
+
+- `cargo check -p tswn_wasm --target wasm32-unknown-unknown` 通过。
+- 增加护盾生成、吸收、死亡、快照序列化、瘟疫百分比 HP 变化以及页面标签增量更新的回归测试。
+- `cargo test -p tswn_wasm`、网页模块测试与播放契约验证通过；真实浏览器覆盖盾条常驻、详情护盾标签、护盾消耗、瘟疫及明暗主题和移动布局。
+- 本次封板重新通过 WASM Rust 11 项、Node/Bun 各 37 项、真实 Node WASM 契约 8 项及 DOM 验证；WASM 分发构建和实际 `version()` 均为 `0.5.7`。
+- core 行为测试通过真实吞噬 effect 验证护盾熟练度上限变化，初始/帧/片段前后/最终状态序列化及兼容 API 投影均保留该字段，不重生成 golden/corpus。
+- 工作区测试（含 124 项 runtime corpus）通过；本机默认临时目录拒绝写入，验证时仅将 `TEMP/TMP` 指向 `target` 下的测试目录，未修改业务代码或系统设置。Clippy 执行成功，既有告警未批量修正。
+- 隔离 Edge 验证盾条紧接 HP 条右侧、同高对齐、按熟练度定长及移动布局，并在真实页面步进后检查详情状态；官方 Dark Reader `4.9.133` npm API 验证 lock、真实 Dynamic 注入提醒与清理。此项不代表读取或操纵用户的扩展全局设置，截图见 [示例说明](examples/README.md#外观验收截图)。
+
+## [0.5.6] - 2026-09-30
+
+### 变更
+
+- 跟进 `tswn_core 0.7.0`，同步核心实现更新；JS／TypeScript 导出契约保持不变，
+  实验性 encoder 暂不新增 WASM 导出。
+
+## [0.5.5] - 2026-09-29
+
+### 新增
+
+- show 示例右下角控制栏补齐快捷键：`C` 收起/展开控制栏，`P` 普通播放，`F` 快进，`T` 极速播放，
+  `I` 打开输入面板，`R` 重新播放，`S` 复制分享链接，`D` 切换明暗主题；按钮同时通过 title 和
+  `aria-keyshortcuts` 暴露对应按键。
+
+### 依赖更新
+
+- 更新 `js-sys`、`serde` 与 `wasm-bindgen` 至现有兼容范围内的最新版本；
+  `tsify` 同步升级至 `0.5.8`，并配合下述 ABI 边界迁移消除弃用告警。
+
+### 变更
+
+- WASM 导出边界从 `#[tsify(into_wasm_abi)]` / `#[tsify(from_wasm_abi)]` 迁移到 `tsify::Ts<T>`：
+  参数改收 `Option<Ts<T>>`，返回改 `Ts<T>` / `Vec<Ts<T>>`，并在函数体内转成普通 Rust 类型。
+  这两个属性自 tsify 0.5.7 起弃用——它们把（反）序列化下沉到 wasm-bindgen 的 ABI 边界，
+  而该边界无法回传失败，只能 `throw_str`：一个 JS 可捕获的异常，却会跳过析构函数，
+  每次失败泄漏一点直到实例死亡（见 <https://github.com/madonoharu/tsify/issues/65>）。
+  此前只要升级 tsify 就会刷出 33 条弃用 warning，迁移后 warning 清零。
+- JS 侧可见契约不变：重新生成的 `tswn_wasm.d.ts` 与迁移前逐字节一致，`.js` glue 的函数名、
+  参数形状与返回类型不变，`examples/` 与契约测试无需改动。
+- show 页面脚本缓存版本更新为 `20260929a`，避免浏览器继续复用旧的快捷键脚本。
+
+### 修复
+
+- 同步 core 的跨平台计时修复：wasm 不再调用未实现的 `std::time::Instant::now()`，
+  改用 `js-sys::Date::now()`，避免胜率、评分、`namer_pf`、`batch_rate` 和 `pair_rate` 等
+  批量路径触发 `RuntimeError: unreachable`；计时精度为毫秒且不保证严格单调，战斗结果不变。
+- 畸形 options 现在返回结构化 `{ code, message }` 错误（`INVALID_ARGUMENT`），不再抛
+  `throw_str` 的裸字符串；`icon_info()`、`FightSession` / `WinRateSession` 的取值方法在
+  序列化失败时也改为抛 `INTERNAL_ERROR`，不再直接 panic。
+
+## [0.5.4] - 2026-09-08
+
+### 新增
+
+- 新增 canonical `BattleSession` 与 plain JS/TS DTO；旧 `FightSession` 保留为委托 core 的兼容包装。
+- `BattleSession.is_failed()` 可查询粘性 Runtime failure；失败时没有 result/stop_reason，`is_done` 仍为 false。
+- show 页面改为真实 streaming：异步帧源、两帧预取、可订阅流控制、逐帧历史回看、显示层昵称与图标隔离，并记录首屏和逐帧性能。
+
+### 变更
+
+- 收紧 canonical TypeScript 的 minion kind、update type、tone 和 text part kind literal union，并为源码声明与生成声明增加 contract tests。
+- 通用错误构造器统一复用 core 的稳定错误码，避免 WASM 包装层自行推断错误分类。
+
+### 修复
+
+- 同步公共 replay view 的苏生 HP 修复：复活句固定为 `0 -> 0`，回血句从 `0 -> x`，show 只渲染回复段。
+- 同步实体转化句的结构化文本修复：“`[2]变成了[1]`”现在同时提供旧对象与新对象的 `player` part，召唤亡灵时被转化对象恢复普通名字效果。
+- 修复白天模式角色详情面板文字与浅色背景同为白色的问题；详情名称、说明文字和属性值现在使用主题变量保持可读对比度。
+- 修复兼容 `FightSession` 状态的 `owner_id` 映射，保留直接 owner，避免误用 root `source_id`。
+- 同步 core 的批量判胜修复：队伍被清空后重新复活时，`batch_rate()`、`pair_rate()` 及带权变体不再误判胜者。
+
+## [0.5.3] - 2026-09-05
+
+### 新增
+
+- 新增 `batch_rate_factored()` 与 `pair_rate_factored()`，接受与靶子组一一对应的权重数组并返回加权结果。
+
+### 变更
+
+- show 示例改为直接调用公共 `battle_replay()` 接口，仅补充输入、种子与耗时等页面元数据；
+  正文的行、片段、HP、死亡效果和侧栏快照均透传 replay view，不再从 runtime normalized run 重建。
+- show 示例按 `ReplayRow.indent` 渲染缩进，并保留回放状态快照的完整属性供左侧角色详情使用。
+
+### 修复
+
+- 修复苏生时绿色当前血量段与蓝色回复段重叠的问题：`0 -> x` 仅显示完整的回复段。
+- 修复被召唤为丧尸等仍存活实体因 `alive == false` 推断而错误使用阵亡名字样式的问题；
+  名字死亡效果现在只读取底层 `ReplayTextPart.death_effect`。
+
+## [0.5.2] - 2026-08-31
+
+### 新增
+
+- 新增 `battle_replay()` 高层入口，返回与 C/Python 对齐的完整 UI 回放结构。
+
+### 修复
+
+- `WinRateSession.thread > 1` 现在返回 `UNSUPPORTED_OPTION`，不再静默降级。
+
+- 同步 core 的 Merge 状态刷新修复；吞噬只合并技能时也会按旧版时机
+  提交 Haste 倍率，WASM 导出与 JSON shape 不变。
+- 同步铁壁打破时立即注销状态，以及尾部空 `@` 按无队名解析的兼容修复。
+- 同步 `@team:metadata` 按 Bun 解析为无队名的修复，并修复目标与 score profile
+  同 clan 时的 core panic；WASM 导出与 JSON shape 不变。
+- 同步嵌套自定义幻影的延迟蓝图修复；`namer_pf()` / `score()` 遇到带 `Clone`、
+  `Shadow` 的幻影不再触发 core panic，WASM 导出与 JSON shape 不变。
+
+## [0.5.1] - 2026-07-30
+
+### 新增
+
+- show 示例新增深色模式：首次打开默认跟随系统 `prefers-color-scheme`，右下角控制栏提供明暗切换按钮；手动选择会保存到 `localStorage`，未手动覆盖时仍会随系统主题变化。
+- 深色模式覆盖战斗列表、回放正文、输入面板、角色详情和结算表，并为窄屏控制栏增加换行布局。
+
+### 修复
+
+- 同步 core 0.5.1 的评分和战斗边界修复，覆盖 clone、状态刷新、Protect 重定向
+  与召唤物延迟死亡顺序；WASM 导出和 JSON shape 不变。
+
+## [0.5.0] - 2026-07-18
+
+### 变更
+
+- `FightSession` 的构造、逐帧推进、状态快照和胜者查询全部切换到主 Runtime；`WinRateSession` 移除最后一处旧 Runner 解析依赖。
+- `FightSession` / `WinRateSession`、`ReplayClip` 与 `ReplayTextPart` 的 JS/JSON shape 保持不变，clip 仍只通过 `parts[]` 表达文本、血条和死亡特效；无显式回放 guard 时上限为 20,000 主回合。
+- 包版本进入 `0.5.0`；本轮不新增执行器选择项，也不恢复任何 clip 顶层渲染字段。
+
+## [0.4.0] - 2026-07-14
+
+### ⚠️ Breaking Changes
+
+- `ReplayClip` typed view 删除多项顶层渲染字段，调用方必须改读 `parts[]` 中的 `ReplayTextPart`。
+- 完整回放页面入口由 `examples/show.html` 改为 `examples/index.html`，并删除 legacy runtime URL fallback。
+- 无 runtime 参数的评分、胜率与 `WinRateSession` 默认改用 Runtime。
+
+### 变更
+
+- `win_rate_sync`、`group_win_rate` 与 `WinRateSession` 内部改用 Runtime prepared 批量执行；原有 JS 类名、进度和结果结构保持不变。
+- 完整回放示例从 `show.html` 重命名为 `examples/index.html`，并移除 `FightSession` / legacy runtime URL fallback；页面只调用 runtime normalized run，分享链接会清理历史 `engine` / `runtime` 参数。
+- 同步 `main` 在 `d266cfe` 之后的 replay part 语义与页面配色，覆盖生命之轮、机制死亡、死亡特效、百分比伤害 HP 条和最新调色板。
+- 精简 `ReplayClip` 导出字段，移除 `text_template`、`player_id`、`data`、`show_hp`、`hp_before`、`hp_after`、`death_effect` 与 `emoji`；这些渲染语义统一由 `parts[]` 中的 `ReplayTextPart` 表达，clip 只保留 delay、颜色/语义、关联 id、侧栏快照和胜利标记。
+- show 示例同步适配新 replay view：规范 `parts[]`、`caster_ids[]`、`target_ids[]` 与侧栏快照数组，并明确正文渲染只消费 `clip.parts[]` 的结构化语义。
+- replay view 同步修复生命之轮体力互换的血条数据：互换句中的两个玩家 part 都会携带各自正确的帧前/帧后 HP，并强制展示血条，即使血量没有实际变化。
+- replay view 同步补齐机制死亡的 `death_effect`：附体、自爆、owner 死亡牵连等没有前置伤害句的死亡，会在“被击倒/消失”句显示死亡特效；所有死亡特效句均不再同时展示血条。
+
+### 修复
+
+- 修复 `updates[].hp_delta` 与 replay view 对“体力减少百分比”类句子的真实扣血量识别：`[2]` 保持百分比展示，HP 条变化改用 `score` 中的实际 HP 变化量。
+
+## [0.3.1] - 2026-07-06
+
+### 新增
+
+- show 示例支持通过 `?input=<url-safe-base64>` 传入 UTF-8 对局输入并自动播放；兼容 `replay` / `data` 参数别名，解码失败时会停留在输入面板并显示错误。
+- show 示例右下角控制栏新增分享按钮，可复制当前对局对应的 `input` 链接；复制成功时会在控制栏上方显示短暂提示。
+
+### 变更
+
+- show 示例右侧战斗正文只消费 `RoundFrame.rows[].clips[]` 结构化 replay view；移除基于 `message_template` / `message_rendered` / `hp_delta` 的旧 fallback，避免前端继续从文本和数值反推分行、delay、血条和死亡效果。
+- show 示例左侧玩家 HP 条变化速度放慢；normal 播放模式下，对战结束后等待 `1500ms` 再显示底部结算表，fast / turbo / 单步跳转保持即时反馈。
+
+### 修复
+
+- 修复 show 示例自定义昵称会通过 `owner_id` 误应用到幻影、使魔、丧尸等固定显示名召唤物的问题；昵称仍应用于本体和分身。
+
+### 验证
+
+- `bun --check crates/tswn_wasm/examples/show-render.js crates/tswn_wasm/examples/show-replay.js crates/tswn_wasm/examples/show-utils.js crates/tswn_wasm/examples/show-wasm.js crates/tswn_wasm/examples/show.js`
+- `python scripts/build_wasm.py --release`
+
+## [0.3.0] - 2026-06-27
+
+### 新增
+
+- `RoundFrame` 新增 `rows[]` replay view 结构：按行组织 `ReplayClip`，每个片段包含展示前延迟、文本模板、结构化文本片段、色调、关联玩家、血条前后值、死亡特效标记、emoji 占位字段和侧栏状态快照。
+- show 示例优先消费 `RoundFrame.rows[].clips[]`，前端不再需要通过正则从消息文本反推玩家、数值、血条变化和死亡特效。
+- `PlayerState` 新增 `display_index`，由底层根据运行期分身命名分配展示序号：本体为 `0` 且不在名字中显示，分身按同一名字下的出现顺序显示为 `#1`、`#2`……
+
+### 变更
+
+- replay view 构建下沉到 `tswn_core::replay_view`，WASM 包装层只负责把 core 结构转换为 `tsify` 暴露类型，后续 Python/C 等接口可复用同一套分行、延迟和血条推演逻辑。
+- replay view 的句子级 delay 改为固定规则：frame 首句 `900ms`、雷击/地裂行首句 `150ms`、展示血条的句子 `600ms`、其他句子 `500ms`，按前述顺序优先匹配。
+- replay view 只在帧前后 HP 不同时展示血条，只在帧前后 HP 均为 `0` 时渲染死亡特效。
+- replay view 的 `color` 改为 `[]` 高亮文字色号；默认高亮为 `0077BB`，解除、识破、中止、打消等状态离开高亮为 `bb7700`，普通文本保持默认正文色。
+- show 示例播完对局后不再弹出结束面板，只在战斗记录底部保留结算表。
+- show 示例保留左侧独立 `#playerId` 编号，同时把名字内的分身编号改为底层 `display_index`，不再用对象 id 作为名字后缀。
+- README 和 examples 文档补充 `ReplayRow`、`ReplayClip`、`ReplayTextPart` 字段说明。
+
+### 验证
+
+- `cargo test -p tswn_core replay_view`
+- `cargo check -p tswn_wasm`
+- `cargo check -p tswn_py`
+- `bun --check crates/tswn_wasm/examples/show-render.js crates/tswn_wasm/examples/show-utils.js crates/tswn_wasm/examples/show.js`
+- `uv run scripts/build_wasm.py --release`
+
+## [0.2.10] - 2026-06-19
+
+### 修复
+
+- 修复零伤害攻击的 `hp_delta` 使用 UI 展示分（`score`）而非实际伤害值（`param`），导致回放血量变化与 `[s_dmg0]` 消息不一致。
+
+## [0.2.9] - 2026-06-18
+
+### 新增
+
+- 补齐一批与 `tswn-cli` / `tswn_py` 对齐的高层 WASM 导出：
+  - 胜率摘要：`win_rate_summary()`、`team_win_rate_summary()`、`group_win_rate_summary()`
+  - 评分与 namer-pf：`score()`、`namer_pf()`
+  - 批量胜率与配队：`batch_rate()`、`pair_rate()`
+  - DIY / 图标 / 列表解析：`to_diy()`、`to_diy_batch()`、`icon_info()`、`parse_group_lines()`
+- 新增对应的强类型 `Cli*Result` / `CliIconInfo` 数据模型，供 JS / TS 调用方直接消费。
+- show 示例新增事件/帧级单步控制、暂停态前后移动、结束结算表和角色详情小窗。
+- 角色详情支持按输入 `id_name` 保存自定义昵称，并通过 `localStorage` 应用到后续回放。
+
+### 变更
+
+- 新增导出统一复用 `tswn_core::cli_api` 的共享高层逻辑，避免 WASM 包装层单独维护一份 CLI helper 实现。
+- README 补充新的 CLI 对齐接口说明与返回值示例。
+- show 示例整理为独立 Fight 展示页：移除胜率混杂入口，弱化帧分隔视觉，使用单独结算表替代调试 winner 行。
+- 左侧角色面板按输入顺序和真实队伍分组；召唤物、分身和临时单位挂在 owner 下方，并在逐消息播放时同步侧栏元数据。
+- owner 下的召唤物/分身保留运行期出现顺序，不再按 id 重排，后出现的单位会追加到该 owner 子列表底部。
+- show 播放速度改为新战斗默认恢复正常速度；雷击、地裂等大范围技能使用更短延迟，避免正常速度下拖慢回放。
+- 左侧 HP/MP 展示改为逐消息刷新，补齐蓝量恢复/消耗、瘟疫和体力减少等血条变化，并细化死亡血条消失动画。
+- 状态变更着色改为依赖 WASM 提供的结构化 `status_change_tokens`，不再只靠前端正则猜测潜行识破、中止和打消等状态。
+
+### 修复
+
+- 修复解析失败后仍残留上一场结果或继续展示不可信回放的问题；严重输入错误会明确提示行号并阻止生成。
+- 补强 `+ol:{...}` 和 `+diy[...] {...}` 输入对象校验，能发现对象尾部垃圾内容、缺字段值和属性数量错误。
+- 修复重播、重置和窗口失焦后左侧角色高亮残留的问题。
+- 修复手动跳帧或播完单帧后侧栏继续保留上一条消息 caster/target 高亮的问题；帧结束快照只同步最终状态。
+- 修复逐消息侧栏刷新时头像、详情按钮和行标题复用旧单位元数据的问题。
+- 修复上一帧已死亡的召唤物/临时单位在本帧重新存活时仍沿用死亡 UI 的问题，同时避免本帧才出现的单位在消息触达前提前显示。
+
+### 验证
+
+- `cargo fmt --check`
+- `cargo check -p tswn_wasm`
+- `cargo test`
+- `bun build crates/tswn_wasm/examples/show.js --target=browser --outdir=target/codex-check/show --root=crates/tswn_wasm/examples`
+- `bun --check crates/tswn_wasm/examples/show-render.js crates/tswn_wasm/examples/show-replay.js crates/tswn_wasm/examples/show-utils.js crates/tswn_wasm/examples/show-wasm.js crates/tswn_wasm/examples/show.js`
+
+## [0.2.8] - 2026-05-24
+
+### 新增
+
+- 为 WASM 数据模型引入 `tsify`，自动生成 `FightReplay`、`PlayerState`、`RoundFrame`、`WinRateResult` 等 TypeScript 领域类型。
+- `FightOptions` / `WinRateOptions` 现在在生成的 `.d.ts` 中暴露为可选字段接口，适合 JS/TS 调用方直接传入配置对象。
+
+### 变更
+
+- `fight(...)`、`fight_summary(...)`、`win_rate_sync(...)`、`group_win_rate(...)` 改为强类型 WASM 边界签名，生成的 TypeScript 声明不再退化为用户级 `any`。
+- `FightSession.players()` / `state()` / `step()` / `run_to_end()` / `winner_ids()` 和 `WinRateSession.progress()` / `step()` / `result()` 改为强类型返回。
+- 清理旧的 `JsValue` 手写序列化 / options 解析辅助路径，统一交给 `tsify` + `serde-wasm-bindgen` 的边界转换处理。
+
+## [0.2.7] - 2026-05-21
+
+### 变更
+
+- show / demo 示例加载 WASM 模块时为 JS glue 与 `.wasm` 文件追加本次页面生命周期内统一的 cache bust 参数，避免浏览器复用旧构建产物。
+- WASM 初始化改为显式传入匹配的 `tswn_wasm_bg.wasm` URL，确保备用加载路径下 JS glue 与 wasm 二进制来自同一目录。
+- normal 自动播放从首个 chunk 开始时不再等待首帧延迟，进入回放后立即渲染第一步。
+
+## [0.2.6] - 2026-05-19
+
+### 新增
+
+- 补齐跨语言通用顶层接口：
+  - `default_eval_rq()`
+  - `win_rate_eval_rq()`
+  - `name_to_png_bytes(name)`
+  - `name_to_icon_rgba(name)`
+  - `group_win_rate(target, against, total_rounds, options?)`
+- `group_win_rate(...)` 返回 `GroupWinRateResult[]`，每项包含 `opponent` 和完整 `WinRateResult`。
+
+### 变更
+
+- `win_rate_sync(...)` 现在复用统一的同步胜率执行路径，避免单局 / 批量接口各自维护一套逻辑。
+- README 示例与字段说明统一改为真实的 snake_case 导出名。
+
+## [0.2.5] - 2026-05-17
+
+### 对齐
+
+- 玩家头像机制对齐混淆版 `md5.js` 的 `Sgls.o6(fy)` 行为：按 `icon_key` 缓存头像，并按首次出现顺序分配 `icon_N` 类名。
+- `PlayerMeta` / `PlayerState` 新增 `icon_key`，用于保留原版 renderer 的头像缓存 key。
+- 运行期单位（分身、使魔、幻影、丧尸）在 `include_icons` 启用时会随状态携带自身头像数据，show 回放优先渲染自身头像，不再默认继承主人头像。
+- show 示例的 CSS 注入改为使用回放归一化后的 `icon_styles` 表，避免同队多名玩家或运行期单位头像 class 与原版不一致。
+
+### 验证
+
+- `cargo check -p tswn_wasm`
+- `cargo test -p tswn_wasm`
+- `bun build crates\tswn_wasm\examples\show.js --target=browser --outdir target\codex-js-check\show`
+
+## [0.2.4] - 2026-05-17
+
+### 对齐
+
+- `RoundFrame.total_delay` 改为按混淆版 `md5.js` 的可见 update 等待规则计算：每条可见消息等待 `max(update.delay0, 上一条可见 update.delay1)`，每帧初始上一条 delay 为 `1800`。
+- 回放 chunk 构建不再使用 `delay1 || delay0`，改为携带混淆版 `md5.js` 的原始未缩放等待时间。
+- normal 播放改为先等待再渲染当前 chunk，并按混淆版 `md5.js` 的 `sqrt(角色数 / 2)` 规则缩放等待时间。
+- 结束帧补齐混淆版 `RunUpdateWin` 的 `3000ms` 等待。
+
+### 文档
+
+- 更新 show 示例中的中文注释，明确 delay 逻辑以混淆版 `md5.js` 为准。
+
+## [0.2.3] - 2026-05-07
+
+### 变更
+
+- 状态标签增强：蓄力显示 step 数值（如 `蓄力 (2)`），潜行显示锁定目标（如 `潜行至 #5`）。
+
+## [0.2.2] - 2026-05-07
+
+### 新增
+
+- 玩家联动高亮：鼠标悬停角色时高亮页面中所有同名元素（show.js）。
+- 战斗回放展示种子信息（show-replay.js）。
+- `MessageTone` 枚举添加 `#[serde(rename_all = "snake_case")]` 序列化支持（model.rs）。
+
+### 优化
+
+- 渲染引擎重构：HP/MP 条改为固定像素宽度（`ceil(值/4)`），更直观紧凑（show-render.js / show-utils.js / show.css）。
+- 简化 body 背景、微调 HP/MP 条高度、移除冗余 font-weight 声明（show.css）。
+- 消息分隔符从中文逗号改为英文逗号，对齐 JSON 输出风格（show-render.js）。
+
+### 重构
+
+- 结算表逻辑重写：添加存活/死亡判断、HP 条绝对定位、完善 JSDoc 类型标注（show-replay.js）。
+
+### 修复
+
+- 修复图标渲染：使用 `player.id_key_name()` 替代 `display_name` 生成图标，确保召唤物/分身正确关联主人（fight.rs）。
+
+## [0.2.1] - 2026-05-07
+
+### 变更
+
+- 去掉 `tswn_core` 依赖的显式 `version` 字段，仅保留 `path` 引用。
+
+### 同步
+
+- JS 示例文件进一步对齐 snake_case 字段名（`iconClassId` → `icon_class_id` 等）。
+
+## [0.2.0] - 2026-05-07
+
+### ⚠️ Breaking Changes
+
+- **所有 JSON 字段从 camelCase 切换为 snake_case**：移除所有 `#[serde(rename_all = "camelCase")]` 属性，字段名直接使用 Rust 侧原生命名。
+
+#### 影响到的数据模型
+
+| 结构体                   | 变更字段示例                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PlayerMeta`             | `idName` → `id_name`、`displayName` → `display_name`、`iconPngBase64` → `icon_png_base64`、`teamIndex` → `team_index`                                                                                                                                                                                                      |
+| `PlayerState`            | `maxHp` → `max_hp`、`mp` → `magic_point`、`movePoint` → `move_point`、`ownerId` → `owner_id`、`allSum` → `all_sum`、`nameFactor` → `name_factor`、`atBoost` → `at_boost`、`statusLabels` → `status_labels`、`teamIndex` → `team_index`、`idName` → `id_name`、`displayName` → `display_name`、`minionKind` → `minion_kind` |
+| `RoundFrame`             | `totalDelay` → `total_delay`、`winnerIds` → `winner_ids`                                                                                                                                                                                                                                                                   |
+| `FightReplay`            | `winnerIds` → `winner_ids`、`finalStates` → `final_states`                                                                                                                                                                                                                                                                 |
+| `FightSummary`           | `winnerIds` → `winner_ids`、`finalStates` → `final_states`                                                                                                                                                                                                                                                                 |
+| `UpdateView`             | `casterId` → `caster_id`、`targetId` → `target_id`、`targetIds` → `target_ids`、`updateType` → `update_type`、`messageTemplate` → `message_template`、`messageRendered` → `message_rendered`                                                                                                                               |
+| `WinRateProgress`        | `roundsDone` → `rounds_done`、`totalRounds` → `total_rounds`                                                                                                                                                                                                                                                               |
+| `WinRateTiming`          | `initNanos` → `init_nanos`、`fightNanos` → `fight_nanos`                                                                                                                                                                                                                                                                   |
+| `WinRateResult`          | `roundsDone` → `rounds_done`、`totalRounds` → `total_rounds`                                                                                                                                                                                                                                                               |
+| `FightOptions`（输入）   | `evalRq` → `eval_rq`、`includeIcons` → `include_icons`、`captureReplay` → `capture_replay`                                                                                                                                                                                                                                 |
+| `WinRateOptions`（输入） | `evalRq` → `eval_rq`                                                                                                                                                                                                                                                                                                       |
+
+#### JS 示例文件同步更新
+
+- `demo.js`、`show.js`、`show-render.js`、`show-replay.js`、`show-utils.js`、`show-wasm.js`：全部字段访问已改为 snake_case。
+
+### 变更
+
+- 依赖 `tswn_core` 从 `0.2.20` 更新为 `0.3`。
+- `PlayerState.mp` → `magic_point`（与 core 层同步）。
+
+## [0.1.2] - 2026-05-06
+
+### 新增
+
+- **状态标签数值化**：所有状态标签带上具体数值。中毒显示层数、铁壁/疾走显示加成值、诅咒显示倍率、狂暴/魅惑/迟缓显示剩余回合。数值为 0 时省略后缀。
+- **守护标签双向展示**：被保护者显示 `被 #id 守护`，守护者显示 `守护 #id 中`（通过 `SkillTrait::protect_to_id()` 查询）。同一角色可同时显示两个标签。
+- **`SkillTrait::protect_to_id()` 支持**：配套 core 层新增方法，用于在 WASM 层查询 ProtectSkill 当前保护目标。
+- **玩家 ID 显示**：左侧角色名字旁显示 ` #playerId` 灰色小字。
+- **空格快捷键**：按空格切换暂停/恢复播放。
+
+### 优化
+
+- **列布局调整**：从 5 列缩减为 4 列，合并蓝量和体力为一列 `mp / movePoint%`，名字列加宽。
+  - 新列序：角色 | HP | 蓝量/体力 | 状态
+- **体力改为百分比**：体力列从原始 `movePoint` 值改为 `movePoint / 2048 * 100` 百分比显示。
+- **列名简化**：蓝量/体力列标题不带括号后缀。
+
+### 样式
+
+- `.player-name-head` 宽度从 `118px` 增加到 `150px`，名字区更宽。
+- 新增 `.player-mp-move-cell` 样式：合并单元格字体略小（`0.85em`），mp 值蓝色、体力值黑色。
+- 新增 `.player-id` 样式：灰色 `0.95em`，间距 `4px`。
+
+### 修复
+
+- 修复 clippy 警告：`collapsible_if`（protect 标签检测嵌套 if → `&& let` 语法）。
+
+## [0.1.1] - 2026-05-04
+
+### 新增
+
+- 头像 CSS Sprite 系统：新增 `iconClassName()`、`buildIconClassCss()`、`withTeamIconClassIds()`、`renderIconSprite()`，头像从 `<img src="data:...">` 改为 `<span class="icon_N">` + background-image 方式渲染，减少 DOM 节点数，便于统一管理头像样式。
+- `withTeamIconClassIds()` 确保同队玩家使用该队首个玩家的头像编号，多对多场景下整队头像一致。
+- 新增 `playbackCheckpoints` 检查点缓存系统，每 `SEEK_CHECKPOINT_FRAME_INTERVAL`（20）帧保存一次 DOM 快照，回退渲染时优先从最近检查点恢复，大幅加速回退操作。
+- `PlayerState` 新增 `idName` / `displayName` 字段，WASM 层直接暴露玩家的真实 id_name 与 display_name，前端不再对召唤单位一律退化为"幻影 #id"。
+- `PlayerState` 新增 `minionKind` 字段（`clone` / `summon` / `shadow` / `zombie`），前端可根据 minion 种类定制显示名。
+- 新增 `MinionKindView` 枚举及从 `tswn_core::MinionKind` 的转换实现。
+- 新增 `replayDisplayName()` 统一格式化回放中的显示名：clone 追加 `#playerId`，summon/shadow/zombie 分别使用“使魔”/“幻影”/“丧尸”基底名并追加 `#playerId`。
+- 新增 `syntheticPlayerFromState()` 辅助函数，基于 state 数据生成可渲染的玩家对象（含 minion 显示名逻辑）。
+- 新增 seed 行展示：前端从原始输入中提取 `seed:` 行并渲染到玩家列表顶部（`show-wasm.js` `extractSpecifiedSeedLine()` + `show-render.js` `seedRowHtml()`）。
+- 新增 `.seed-row` / `.seed-label` / `.seed-value` CSS 样式。
+- `FightReplay` 类型新增 `seedLine` 字段。
+
+### 优化
+
+- 暂停播放时自动切回 normal 速度模式，避免 fast/turbo 在暂停后产生突兀的播放体验。
+- 重构 `show-render.js`：消除 4 处重复的幻影/分身玩家对象创建逻辑，统一使用 `syntheticPlayerFromState()`。
+- `FightSession::build_frame()` 改为每帧从state实时提取玩家名，去掉缓存字段 `player_names`，避免各帧间名字不一致。
+- `winnerNamesText()` 改为优先从 `replay.finalStates` 中解析胜者名，支持 minion 胜者的正确显示。
+
+### 播放引擎重构
+
+- `show.js` 重写播放架构：引入 `prepareReplayPlan()` 预计算渲染计划（`currentPlan` + `flatChunks`），替代旧的逐帧 `playReplay()` 循环。
+- `renderPlaybackToCursor()` 重写：支持增量追加 chunk、基于检查点的回退恢复、`forceReset` 选项，不再每次回退都全量重置。
+- 新增 `findNearestPlaybackCheckpointCursor()` / `restorePlaybackCheckpoint()` / `storePlaybackCheckpoint()` 检查点管理函数。
+- 新增 `appendChunksBetween()` 在任意区间（startCursor ~ targetCursor）追加 chunk，替代旧的全量重置式渲染。
+- 新增暂停/继续系统：`pauseBtn`、`playbackPaused` 状态、`autoplayFromCurrentCursor()` 支持被打断的延迟等待。
+- 新增单步控制：4 个按钮（后退/前进一个 event、后退/前进一帧）+ 键盘快捷键（←→ 步进 event，↑↓ 步进帧），仅暂停模式下有效。
+- 新增 `renderPlaybackToCursor()` 支持回退到任意位置重新渲染。
+- 新增 `syncPlaybackUi()` 统一刷新所有按钮/文本的 UI 状态。
+- 速度切换（fast/turbo）在暂停态下自动恢复播放。
+
+### 战斗结算
+
+- `show-replay.js` 新增 `buildReplayResultSummary()` 统计系统：按原版口径累加 score、归属 kills 到 root owner、记录致命一击。
+- `buildReplayResultSummary()` 中记录 `finalState` 和 `iconClassId`，结算表格每行显示最终 HP 条（`summaryHpBarHtml()`），直观展示存活角色剩余血量。
+- 新增 `buildReplayResultTableHtml()` 生成胜者/败者结算表格（得分/击杀/致命一击列）。
+- `show.js` `renderEndPanel()` 和 `appendReplayResultBlock()` 独立出结束逻辑，回放完成后自动展示结算表。
+
+### UI 样式
+
+- 新增 `.icon-sprite` 统一样式类（16×16，background-image + background-size），替代原先分散在 `.sgl`、`.msg-avatar`、`.summary-actor-icon` 上的重复头像样式。
+- 新增结算表格样式体系：`.result-table*`（自适应宽度，不填满）、`.summary-actor*`（角色头像+名称）。
+- 新增 `.summary-actor-body` 网格布局容器，容纳角色名 + HP 条纵向排列。
+- 新增 `.summary-actor.has-hp` / `.summary-actor-hp` 样式，支持结算表格中 HP 条对齐。
+- 新增 `.step-controls` 网格布局（2×2 的 34px 按钮），通过 `.right-controls` 容器精确居中于暂停按钮上方。
+- 新增 `.micon.is-paused` 暂停按钮背景色切换。
+- 新增 `#endPanel` 宽度限制，响应式布局适配。
+- 统一四个 step 按钮的 SVG 图标间距：bar 宽 2px、三角宽 8px、间距 3px。
+
+### 按钮与快捷键
+
+- 四个 step 按钮 title 标注对应快捷键（←→↑↓）。
+- 暂停按钮不再切换图标，保持暂停符号。
+
+### 修复
+
+- 修复回放结束后反复按前进按钮不断重渲染玩家列表和重复追加结算表的问题：`renderPlaybackToCursor()` 中游标没动且完成状态没变时提前返回；`appendReplayResultBlock()` 追加前先移除已有 `.battle-result-block`。
+- 修复回放结束后暂停按钮被禁用的问题：`syncPlaybackUi()` 中 `pauseBtn.disabled` 不再依赖 `playbackFinished`，回放完成后仍可暂停/步进操作。
+- 修复 `renderPlaybackToCursor()` 早期返回守卫误拦截 `forceReset` 导致头像渲染失效的问题：将 `forceReset` 分支移到最前面，避免初始化渲染被跳过。
+- 修复结算表格行高过高的问题：缩减 `.result-table th/td` 的 `padding` 为 `2px 6px`，同时保持字号 `15px`、行高 `16px`，使表格更紧凑。
+- 修复结算表格中胜者只显示最后存活玩家的问题：`buildReplayResultSummary()` 改为使用 `replay.winnerIds`（获胜队伍全员 roster）区分胜者/败者，而非仅依赖 `alive` 状态。
+- 修复结算表格中人名下划线被截断的问题：`.summary-actor-name` 单独设置 `line-height: 20px`，避免受 `td` 紧凑行高和 `overflow: hidden` 影响。
+- 修复死亡角色在后续帧中反复播放 `oldhp` 清空动画的问题：`.player-row.is-dead .oldhp, .player-row.is-dead .healhp` 禁用 CSS 过渡，死亡帧的 HP 归零动画正常播放，后续帧不再重复。
+
+### 示例
+
+- `show-utils.js`：新增 `iconClassName()`、`buildIconClassCss()`、`withTeamIconClassIds()`、`renderIconSprite()` 头像 Sprite 工具函数。
+- `show-render.js`：`actorToken()`、`renderPlayers()`、`syntheticPlayerFromState()` 头像渲染从 `<img>` 改为 `renderIconSprite()`。
+- `show.js`：引入 `normalizeReplayPlayers()` 在回放开始时为玩家补齐 `iconClassId`；新增 `ensureIconStyleTag()` / `syncIconStyles()` 动态注入 CSS 背景图规则；播放引擎新增 `playbackCheckpoints` 检查点缓存。
+- `show-replay.js`：`actorSummaryHtml()` 支持 `showHp` 选项显示 HP 条；`buildReplayResultSummary()` 中记录 `finalState` 和 `iconClassId`。
+- `show.css`：头像样式从分散的 `.sgl`/`.msg-avatar`/`.summary-actor-icon` 统一为 `.icon-sprite`。
+- `show-replay.js`：`renderReplayIntro()` 将 `seedLine` 写入 `playerList.dataset`，支持增量更新时保留 seed。
+- `show.js`：`FightState` JSDoc 类型标注新增 `idName`、`displayName`、`minionKind`。
+- `show-wasm.js`：`loadModule()` 改用 `import.meta.url` 动态解析 `pkg/` 路径，同时尝试 `../pkg/` 和 `./pkg/` 两个候选，兼容 examples/ 子目录和扁平部署两种结构。
+
+## [0.1.0] - 2026-04-29
+
+### 新增
+
+- 新增 `tswn_wasm` crate，提供面向浏览器前端的 `wasm-bindgen` 封装层，不再沿用 `tswn_capi` 的裸指针 / 手动释放式接口。
+- 新增顶层 wasm 导出：
+  - `version()`
+  - `core_version()`
+  - `name_to_png_base64(name)`
+  - `fight(raw_input, options?)` — 一次性跑完整局，返回 `FightReplay`
+  - `fight_summary(raw_input, options?)` — 轻量摘要，返回 `FightSummary`
+  - `win_rate_sync(raw_input, total_rounds, options?)` — 同步跑完胜率统计，返回 `WinRateResult`
+- 新增 `FightSession`，支持逐回合推进：
+  - `players()` — 返回 `PlayerMeta[]`
+  - `state()` — 返回当前全量 `PlayerState[]`
+  - `is_finished()` — 是否已产生胜者
+  - `winner_ids()` — 获胜方 ID 列表
+  - `step()` — 推进一步，返回 `RoundFrame`（含 `updates`、`states`、`total_delay`、`finished`、`winner_ids`）
+  - `run_to_end(limit?)` — 推进至结束，可选限制最大帧数，返回 `FightReplay`
+- 新增 `WinRateSession`，支持浏览器侧分批推进胜率统计：
+  - `is_finished()`
+  - `progress()` — 返回 `WinRateProgress`
+  - `step(batch_size?)` — 推进指定局数（默认 100），返回 `WinRateProgress`
+  - `result()` — 返回 `WinRateResult`（含 `timing` 耗时信息）
+  - `eval_rq()` — 返回当前使用的 eval_rq 值
+- 新增前端即用的数据模型导出：
+  - 玩家元数据 `PlayerMeta`（含 `icon_png_base64`，由 `include_icons` 选项控制）
+  - 玩家状态快照 `PlayerState`（含 `owner_id` 追溯召唤单位归属）
+  - 渲染后的更新消息 `UpdateView`（含 `message_rendered`、`message_template`、`tone`）
+  - 消息色调枚举 `MessageTone`：`Normal` / `Damage` / `Recover` / `Knockout`
+  - 更新类型枚举 `UpdateTypeView`：`Win` / `None` / `NextLine`
+  - 回合帧 `RoundFrame`（含 `total_delay` 供 JS 正常速度播放）
+  - 完整回放 `FightReplay`
+  - 轻量摘要 `FightSummary`
+  - 增量胜率进度 `WinRateProgress` / 胜率结果 `WinRateResult`（含 `WinRateTiming`）
+- 新增 `FightOptions`：
+  - `eval_rq` — 名称评分参数
+  - `include_icons` — 是否包含 PNG Base64 头像
+  - `capture_replay` — 是否捕获逐帧回放数据（默认 true，设为 false 可加速 `run_to_end`）
+- 新增 `WinRateOptions`：
+  - `eval_rq` — 名称评分参数（默认使用 `WIN_RATE_EVAL_RQ`）
+  - `thread` — 线程数（wasm 目标下恒为 1）
+- 新增错误对象封装：Rust 侧错误统一转成 `{ code, message }` 风格的 JS 可读对象。错误码包括：
+  - `INVALID_INPUT`
+  - `INVALID_OPTIONS`
+  - `RUNNER_INIT_FAILED`
+  - `WIN_RATE_INVALID_GROUPS`
+  - `INTERNAL_ERROR`
+
+### 兼容性
+
+- `WinRateSession` 内部对齐 `tswn_core` 当前 wasm 兼容策略：浏览器目标下胜率路径保持单线程，避免进入 `std::thread` 分支。
+- 战斗日志在 wasm 层额外做显示名渲染（`message_rendered`），同时保留原始模板（`message_template`），不再直接暴露 `RunUpdate::msg()` 的数字 `PlrId` 替换结果。
+- wasm32 目标下不测量耗时（`WinRateTiming` 中各 nanos 字段为 0），非 wasm 目标正常记录。
+
+### 状态标签系统（本次追加）
+
+- `PlayerState` 新增 `status_labels: Vec<String>` 字段，序列化时为空则跳过，前端可直接用于渲染玩家状态标签
+- 在 `collect_states()` 中为每个玩家收集实时状态标签：
+  - **技能运行时态**：`聚气`（Accumulate 激活时）、`蓄力`（Charge 激活时）、`隐匿`（Hide 激活时）、`潜行`（Assassinate 激活时）
+  - **状态效果**：`狂暴`、`魅惑`、`诅咒`、`疾走`、`冰冻`、`铁壁`、`中毒`、`守护`、`迟缓`、`垂死`
+  - `冰冻` 同时覆盖 `IceState` 与 `status.frozen` 两种来源，去重显示
+- 新增 `push_status_label()` 去重辅助函数，避免同一标签被多次添加
+- 新增 `has_active_skill()` 泛型辅助函数，通过 `skill_storage()` 遍历玩家技能，按 `debug_skill_type_name()` 后缀匹配及自定义条件筛选
+
+### 逐段渲染系统（本次追加）
+
+- `show-render.js` 新增 `buildFrameRows()` 函数，将一帧拆分为多个渲染 chunk（`battleRows`/`frameBody`/`row`/`delay`），支持 normal/fast 模式按 chunk delay 逐段推进播放
+- `show.js` 播放逻辑从逐帧渲染改为逐段渲染：
+  - normal/fast 模式按 `chunk.delay / totalFrameDelay * targetFrameDelay` 比例分配每段等待时间
+  - turbo 模式保持原有批量缓冲 HTML 逻辑不变
+- `show-render.js` 新增状态标签 UI 渲染：
+  - `renderStatusPill()` 渲染单个标签 pill
+  - `renderPlayerStatusPills()` 渲染玩家所有标签
+  - `sidebarStatusLabels()` 安全读取 `state.statusLabels`
+  - `statusPillTone()` 根据标签内容分类正/负面色调
+- `show.js` 的 `FightState` JSDoc 类型标注同步更新，新增字段：`resistance`, `wisdom`, `point`, `allSum`, `nameFactor`, `atBoost`, `attract`, `statusLabels`
+
+### 样式
+
+- `show.css` 新增 `.player-effects` 布局与间距
+- 新增 `.status-pill.positive`（绿色调，用于正面状态）和 `.status-pill.negative`（红色调，用于负面状态）
+- 优化 `.player-effects .status-pill` 行高，适配在玩家面板中的紧凑显示
+
+### 示例
+
+- 新增 `examples/` 目录，提供两套静态页面 demo：
+  - `demo.html` / `demo.js` / `demo.css`：快速功能验证（战斗 + 胜率）
+  - `show.html` / `show.js` / `show.css`：完整对局动画展示
+    - `show-wasm.js`：WASM 模块加载与初始化
+    - `show-utils.js`：DOM 渲染工具函数
+    - `show-render.js`：玩家状态 / 头像渲染
+    - `show-replay.js`：逐帧回放逻辑
+  - `examples/README.md`：运行说明
+- 示例覆盖：
+  - 初始化 wasm 包
+  - 创建 `FightSession` 并逐步推进回合
+  - 调用 `fight_summary(...)`
+  - 创建 `WinRateSession` 并分批显示进度
+  - 完整对局动画播放（含头像、状态条、更新消息渲染）

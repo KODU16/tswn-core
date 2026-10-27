@@ -1,0 +1,645 @@
+﻿//! WASM 层数据模型定义。
+//!
+//! 定义从 Rust 向 JavaScript 暴露的所有数据结构，包括战斗选项、玩家元数据、
+//! 每帧状态快照、战斗回放、胜率结果等，均通过 `tsify` 生成对应的 TypeScript 类型声明。
+//!
+//! 这些类型只保留 `#[derive(Tsify)]`，不再使用 `#[tsify(into_wasm_abi)]` /
+//! `#[tsify(from_wasm_abi)]`：那套属性把（反）序列化下沉到 wasm-bindgen 的 ABI
+//! 边界，而该边界无法回传失败，反序列化报错只能 `throw_str`，跳过析构函数并造成
+//! 内存泄漏（见 <https://github.com/madonoharu/tsify/issues/65>）。
+//! 现在统一由导出函数经 `tsify::Ts<T>` 在函数体内完成转换，失败时走普通
+//! `Result`。生成的 TypeScript 声明描述普通数据对象，不代表持有需 free 的会话句柄。
+//! 可选输入字段缺失时使用解析器默认值；规范 Battle DTO 的手写类型另见 battle_types.d.ts，
+//! 不应把兼容 FightReplay 字段与规范回放混用。
+
+use serde::{Deserialize, Serialize};
+use tsify::Tsify;
+use tswn_core::cli_api as core_cli_api;
+use tswn_core::runtime::RuntimeMinionKind;
+use tswn_core::runtime::update::UpdateType;
+
+#[derive(Debug, Clone, Default, Deserialize, Tsify)]
+/// 旧页面兼容对局选项；capture_replay 只控制完整回放是否保存帧，默认保存。
+pub struct FightOptions {
+    #[tsify(optional)]
+    pub eval_rq: Option<f64>,
+    #[tsify(optional)]
+    pub include_icons: Option<bool>,
+    #[tsify(optional)]
+    pub capture_replay: Option<bool>,
+}
+
+impl FightOptions {
+    pub fn resolved_eval_rq(&self) -> f64 { self.eval_rq.unwrap_or(tswn_core::namerena::eval_name::DEFAULT_EVAL_RQ) }
+
+    pub fn include_icons(&self) -> bool { self.include_icons.unwrap_or(false) }
+
+    pub fn capture_replay(&self) -> bool { self.capture_replay.unwrap_or(true) }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, Tsify)]
+/// 分批/同步胜率选项；eval_rq 默认胜率口径，thread 缺失或为 0/1 均使用当前线程。
+pub struct WinRateOptions {
+    #[tsify(optional)]
+    pub eval_rq: Option<f64>,
+    #[tsify(optional)]
+    pub thread: Option<u32>,
+}
+
+impl WinRateOptions {
+    pub fn resolved_eval_rq(&self) -> f64 { self.eval_rq.unwrap_or(tswn_core::namerena::eval_name::WIN_RATE_EVAL_RQ) }
+
+    pub fn resolved_thread(&self) -> Result<u32, &'static str> {
+        match self.thread.unwrap_or(0) {
+            0 | 1 => Ok(1),
+            _ => Err("thread must be 0 or 1 for the wasm target"),
+        }
+    }
+}
+
+/// 规范战斗会话与完整回放共用选项；缺失字段使用 core 默认值。
+/// max_rounds 为正数回合预算，不是可见帧数；include_icons 会在快照中附图标 data URL。
+#[derive(Debug, Clone, Deserialize, Tsify)]
+pub struct BattleOptions {
+    #[tsify(optional)]
+    pub eval_rq: Option<f64>,
+    #[tsify(optional)]
+    pub include_icons: Option<bool>,
+    #[tsify(optional)]
+    pub max_rounds: Option<usize>,
+    /// 玩家受控队伍编号；传了就会在轮到该队伍本体/分身时暂停等指令。
+    #[tsify(optional)]
+    pub controlled_team: Option<usize>,
+}
+
+impl Default for BattleOptions {
+    fn default() -> Self {
+        Self {
+            eval_rq: None,
+            include_icons: None,
+            max_rounds: None,
+            controlled_team: None,
+        }
+    }
+}
+
+impl BattleOptions {
+    pub fn to_core(&self) -> core_cli_api::BattleOptions {
+        let mut options = core_cli_api::BattleOptions::default();
+        if let Some(eval_rq) = self.eval_rq {
+            options.eval_rq = eval_rq;
+        }
+        options.include_icons = self.include_icons.unwrap_or(false);
+        if let Some(max_rounds) = self.max_rounds {
+            options.max_rounds = max_rounds;
+        }
+        options.controlled_team = self.controlled_team;
+        options
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct PlayerMeta {
+    pub id: usize,
+    pub team_index: usize,
+    pub id_name: String,
+    pub icon_key: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_png_base64: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct PlayerState {
+    pub id: usize,
+    pub team_index: usize,
+    pub id_name: String,
+    pub icon_key: String,
+    pub display_name: String,
+    pub display_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_png_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minion_kind: Option<MinionKindView>,
+    pub hp: i32,
+    pub max_hp: i32,
+    /// 剩余吸收护盾，合计常规蓄盾与 ShieldValue；不含铁壁，死亡时为 0。
+    pub shield: i32,
+    /// 当前护盾技能熟练度，随吞噬等技能变化更新；不是实际盾值的硬上限。
+    pub max_shield: u32,
+    pub magic_point: i32,
+    pub move_point: i32,
+    pub attack: i32,
+    pub defense: i32,
+    pub speed: i32,
+    pub agility: i32,
+    pub magic: i32,
+    pub resistance: i32,
+    pub wisdom: i32,
+    pub point: u32,
+    pub all_sum: u32,
+    pub name_factor: f64,
+    pub at_boost: f64,
+    pub attract: f64,
+    pub frozen: bool,
+    pub alive: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum MinionKindView {
+    Clone,
+    Summon,
+    Shadow,
+    Zombie,
+}
+
+impl From<RuntimeMinionKind> for MinionKindView {
+    fn from(value: RuntimeMinionKind) -> Self {
+        match value {
+            RuntimeMinionKind::Clone => Self::Clone,
+            RuntimeMinionKind::Summon => Self::Summon,
+            RuntimeMinionKind::Shadow => Self::Shadow,
+            RuntimeMinionKind::Zombie => Self::Zombie,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateTypeView {
+    Win,
+    None,
+    NextLine,
+}
+
+impl From<UpdateType> for UpdateTypeView {
+    fn from(value: UpdateType) -> Self {
+        match value {
+            UpdateType::Win => Self::Win,
+            UpdateType::None => Self::None,
+            UpdateType::NextLine => Self::NextLine,
+        }
+    }
+}
+
+impl From<&str> for UpdateTypeView {
+    fn from(value: &str) -> Self {
+        match value {
+            "win" => Self::Win,
+            "none" => Self::None,
+            "next_line" => Self::NextLine,
+            other => panic!("unknown runtime update_type token: {other}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct RuntimeNormalizedRunView {
+    pub rounds: Vec<RuntimeNormalizedOutcomeView>,
+    pub winner_team: Option<usize>,
+    pub guard_exhausted: bool,
+    pub total_score: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct RuntimeNormalizedOutcomeView {
+    pub winner_team: Option<usize>,
+    pub round: u64,
+    pub total_score: u64,
+    pub rng_i: u32,
+    pub rng_j: u32,
+    pub entity_ids: Vec<usize>,
+    pub teams: Vec<usize>,
+    pub hp: Vec<i32>,
+    pub magic_point: Vec<i32>,
+    pub defense: Vec<i32>,
+    pub resistance: Vec<i32>,
+    pub alive: Vec<bool>,
+    pub round_order: Vec<usize>,
+    pub flat_alive: Vec<usize>,
+    pub team_alive: Vec<Vec<usize>>,
+    pub alive_group_count: usize,
+    pub actions: Vec<RuntimeActionBoundaryView>,
+    pub frames: Vec<RuntimeUpdateFrameView>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct RuntimeActionBoundaryView {
+    pub round: u64,
+    pub actor: usize,
+    pub target: usize,
+    pub amount: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct RuntimeUpdateFrameView {
+    pub message: String,
+    pub caster: usize,
+    pub target: usize,
+    pub targets: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param: Option<u32>,
+    pub score: u32,
+    pub delay0: i32,
+    pub delay1: i32,
+    pub update_type: UpdateTypeView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageTone {
+    /// 普通消息（无特殊视觉效果）
+    Normal,
+    /// 伤害消息
+    Damage,
+    /// 回复消息
+    Recover,
+    /// 击倒消息
+    Knockout,
+    /// 状态离开消息
+    StatusExit,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct UpdateView {
+    pub score: u32,
+    pub delay0: i32,
+    pub delay1: i32,
+    pub caster_id: usize,
+    pub target_id: usize,
+    pub target_ids: Vec<usize>,
+    pub update_type: UpdateTypeView,
+    pub message_template: String,
+    pub message_rendered: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hp_delta: Option<i32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_change_tokens: Vec<String>,
+    /// 消息色调，由 WASM 根据模板内容判定，JS 无需再通过关键词反推。
+    pub tone: MessageTone,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayTextPartKind {
+    Text,
+    Highlight,
+    Player,
+    Data,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct ReplayTextPart {
+    pub kind: ReplayTextPartKind,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player_id: Option<usize>,
+    pub show_hp: bool,
+    pub hp_before: i32,
+    pub hp_after: i32,
+    pub death_effect: bool,
+    pub emoji: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct ReplayClip {
+    pub delay: i32,
+    pub color: String,
+    pub tone: MessageTone,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<ReplayTextPart>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caster_ids: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_ids: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_states: Vec<PlayerState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_previous_states: Vec<PlayerState>,
+    pub winner: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct ReplayRow {
+    pub indent: bool,
+    pub clips: Vec<ReplayClip>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct RoundFrame {
+    pub finished: bool,
+    pub winner_ids: Vec<usize>,
+    pub updates: Vec<UpdateView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<ReplayRow>,
+    pub states: Vec<PlayerState>,
+    /// 帧内所有可见 update 的原始等待总和（毫秒），按混淆版 md5.js 的 delay 规则计算，未按角色数量缩放。
+    pub total_delay: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct FightReplay {
+    pub players: Vec<PlayerMeta>,
+    pub frames: Vec<RoundFrame>,
+    pub winner_ids: Vec<usize>,
+    pub final_states: Vec<PlayerState>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct FightSummary {
+    pub finished: bool,
+    pub players: Vec<PlayerMeta>,
+    pub winner_ids: Vec<usize>,
+    pub final_states: Vec<PlayerState>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[serde(transparent)]
+pub struct WinnerIds(pub Vec<usize>);
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct WinRateProgress {
+    pub done: bool,
+    pub rounds_done: usize,
+    pub total_rounds: usize,
+    pub wins: usize,
+    pub percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct WinRateTiming {
+    pub init_nanos: u64,
+    pub fight_nanos: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct WinRateResult {
+    pub done: bool,
+    pub rounds_done: usize,
+    pub total_rounds: usize,
+    pub wins: usize,
+    pub percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<WinRateTiming>,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct GroupWinRateResult {
+    pub opponent: String,
+    pub result: WinRateResult,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliWinRateResult {
+    pub wins: usize,
+    pub total: usize,
+    pub win_rate: f64,
+    pub init_nanos: u64,
+    pub fight_nanos: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliGroupWinRateResult {
+    pub opponent: String,
+    pub result: CliWinRateResult,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliScoreResult {
+    pub score: f64,
+    pub wins: usize,
+    pub total: usize,
+    pub errors: usize,
+    pub init_nanos: u64,
+    pub fight_nanos: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliNamerPfResult {
+    pub group: Vec<String>,
+    pub modes: Vec<String>,
+    pub scores: Vec<f64>,
+    pub total_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliBatchRateResult {
+    pub label: String,
+    pub avg_win_rate: f64,
+    pub aggregate_win_rate: f64,
+    pub wins: usize,
+    pub total: usize,
+    pub valid_matchups: usize,
+    pub skipped_matchups: usize,
+    pub init_nanos: u64,
+    pub fight_nanos: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliPairRateEntry {
+    pub name: String,
+    pub rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliPairRateResult {
+    pub label: String,
+    pub final_score: f64,
+    pub head: usize,
+    pub selected: usize,
+    pub top_pairs: Vec<CliPairRateEntry>,
+    pub aggregate_win_rate: f64,
+    pub wins: usize,
+    pub total: usize,
+    pub valid_matchups: usize,
+    pub skipped_matchups: usize,
+    pub init_nanos: u64,
+    pub fight_nanos: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct CliIconInfo {
+    pub border_style: usize,
+    pub shapes: Vec<usize>,
+    pub bg_color_idx: usize,
+    pub bg_color: [u8; 3],
+    pub fg_color_indices: Vec<usize>,
+    pub fg_colors: Vec<[u8; 3]>,
+    pub colors_consumed: usize,
+}
+
+fn nanos_to_u64(value: u128) -> u64 { u64::try_from(value).unwrap_or(u64::MAX) }
+
+impl From<core_cli_api::JsonRuntimeNormalizedRun> for RuntimeNormalizedRunView {
+    fn from(value: core_cli_api::JsonRuntimeNormalizedRun) -> Self {
+        Self {
+            rounds: value.rounds.into_iter().map(Into::into).collect(),
+            winner_team: value.winner_team,
+            guard_exhausted: value.guard_exhausted,
+            total_score: value.total_score,
+        }
+    }
+}
+
+impl From<core_cli_api::JsonRuntimeNormalizedOutcome> for RuntimeNormalizedOutcomeView {
+    fn from(value: core_cli_api::JsonRuntimeNormalizedOutcome) -> Self {
+        Self {
+            winner_team: value.winner_team,
+            round: value.round,
+            total_score: value.total_score,
+            rng_i: value.rng_i,
+            rng_j: value.rng_j,
+            entity_ids: value.entity_ids,
+            teams: value.teams,
+            hp: value.hp,
+            magic_point: value.magic_point,
+            defense: value.defense,
+            resistance: value.resistance,
+            alive: value.alive,
+            round_order: value.round_order,
+            flat_alive: value.flat_alive,
+            team_alive: value.team_alive,
+            alive_group_count: value.alive_group_count,
+            actions: value
+                .actions
+                .into_iter()
+                .map(|action| RuntimeActionBoundaryView {
+                    round: action.round,
+                    actor: action.actor,
+                    target: action.target,
+                    amount: action.amount,
+                })
+                .collect(),
+            frames: value.frames.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<core_cli_api::JsonRuntimeUpdateFrame> for RuntimeUpdateFrameView {
+    fn from(value: core_cli_api::JsonRuntimeUpdateFrame) -> Self {
+        Self {
+            message: value.message,
+            caster: value.caster,
+            target: value.target,
+            targets: value.targets,
+            param: value.param,
+            score: value.score,
+            delay0: value.delay0,
+            delay1: value.delay1,
+            update_type: value.update_type.into(),
+        }
+    }
+}
+
+impl From<core_cli_api::WinRateResult> for CliWinRateResult {
+    fn from(value: core_cli_api::WinRateResult) -> Self {
+        Self {
+            wins: value.wins,
+            total: value.total,
+            win_rate: value.win_rate,
+            init_nanos: nanos_to_u64(value.init_nanos),
+            fight_nanos: nanos_to_u64(value.fight_nanos),
+        }
+    }
+}
+
+impl From<core_cli_api::GroupWinRateResult> for CliGroupWinRateResult {
+    fn from(value: core_cli_api::GroupWinRateResult) -> Self {
+        Self {
+            opponent: value.opponent,
+            result: value.result.into(),
+        }
+    }
+}
+
+impl From<core_cli_api::ScoreResult> for CliScoreResult {
+    fn from(value: core_cli_api::ScoreResult) -> Self {
+        Self {
+            score: value.score,
+            wins: value.wins,
+            total: value.total,
+            errors: value.errors,
+            init_nanos: nanos_to_u64(value.init_nanos),
+            fight_nanos: nanos_to_u64(value.fight_nanos),
+        }
+    }
+}
+
+impl From<core_cli_api::NamerPfResult> for CliNamerPfResult {
+    fn from(value: core_cli_api::NamerPfResult) -> Self {
+        Self {
+            group: value.group,
+            modes: value.modes,
+            scores: value.scores,
+            total_score: value.total_score,
+        }
+    }
+}
+
+impl From<core_cli_api::BatchRateResult> for CliBatchRateResult {
+    fn from(value: core_cli_api::BatchRateResult) -> Self {
+        Self {
+            label: value.label,
+            avg_win_rate: value.avg_win_rate,
+            aggregate_win_rate: value.aggregate_win_rate,
+            wins: value.wins,
+            total: value.total,
+            valid_matchups: value.valid_matchups,
+            skipped_matchups: value.skipped_matchups,
+            init_nanos: nanos_to_u64(value.init_nanos),
+            fight_nanos: nanos_to_u64(value.fight_nanos),
+        }
+    }
+}
+
+impl From<core_cli_api::PairRateEntry> for CliPairRateEntry {
+    fn from(value: core_cli_api::PairRateEntry) -> Self {
+        Self {
+            name: value.name,
+            rate: value.rate,
+        }
+    }
+}
+
+impl From<core_cli_api::PairRateResult> for CliPairRateResult {
+    fn from(value: core_cli_api::PairRateResult) -> Self {
+        Self {
+            label: value.label,
+            final_score: value.final_score,
+            head: value.head,
+            selected: value.selected,
+            top_pairs: value.top_pairs.into_iter().map(Into::into).collect(),
+            aggregate_win_rate: value.aggregate_win_rate,
+            wins: value.wins,
+            total: value.total,
+            valid_matchups: value.valid_matchups,
+            skipped_matchups: value.skipped_matchups,
+            init_nanos: nanos_to_u64(value.init_nanos),
+            fight_nanos: nanos_to_u64(value.fight_nanos),
+        }
+    }
+}
+
+impl From<core_cli_api::IconInfo> for CliIconInfo {
+    fn from(value: core_cli_api::IconInfo) -> Self {
+        Self {
+            border_style: value.border_style,
+            shapes: value.shapes,
+            bg_color_idx: value.bg_color_idx,
+            bg_color: value.bg_color,
+            fg_color_indices: value.fg_color_indices,
+            fg_colors: value.fg_colors,
+            colors_consumed: value.colors_consumed,
+        }
+    }
+}
+
+/// 供一次性调用方使用的兼容名称。
+pub type BattleReplayOptions = BattleOptions;

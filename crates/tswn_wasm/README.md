@@ -1,0 +1,249 @@
+# tswn_wasm
+
+`tswn_core` 的浏览器端 WASM 接口（wasm-bindgen）。
+
+## 目标
+
+为网页前端提供 JS 友好的 wasm 封装，不暴露裸指针或 C ABI 字符串；会话对象需要显式 `free()` 释放。
+可直接支撑类似 `fast-namerena/index.html` 的静态页面。
+
+## 导出
+
+### 顶层函数
+
+| 函数                                                      | 说明                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------- |
+| `version()`                                               | wasm 包装层版本                                                     |
+| `core_version()`                                          | tswn_core 版本                                                      |
+| `default_eval_rq()`                                       | 普通对局默认 eval_rq                                                |
+| `win_rate_eval_rq()`                                      | 胜率语义默认 eval_rq                                                |
+| `name_to_png_base64(name)`                                | 名称 → PNG data URL（含 `data:image/png;base64,` 前缀）                                                   |
+| `name_to_png_bytes(name)`                                 | 名称 → PNG 字节                                                     |
+| `name_to_icon_rgba(name)`                                 | 名称 → 16×16 RGBA                                                   |
+| `fight(raw_input, options?)`                              | 一次性跑完整局，返回 `FightReplay`                                  |
+| `fight_summary(raw_input, options?)`                      | 轻量摘要，返回 `FightSummary`（赢家、玩家列表、最终状态）           |
+| `win_rate_sync(raw_input, total_rounds, options?)`        | 同步跑完胜率统计，返回 `WinRateResult`                              |
+| `group_win_rate(target, against, total_rounds, options?)` | 批量计算 target 对多个 opponent 的胜率，返回 `GroupWinRateResult[]` |
+| `win_rate_summary(...)` / `team_win_rate_summary(...)`    | CLI 对齐的详细胜率摘要，返回 `CliWinRateResult`                     |
+| `group_win_rate_summary(...)`                             | CLI 对齐的批量详细胜率摘要，返回 `CliGroupWinRateResult[]`          |
+| `score(...)` / `namer_pf(...)`                            | CLI 对齐的评分 / 命配 helper                                        |
+| `batch_rate(...)` / `pair_rate(...)`                      | CLI 对齐的批量对抗 / 配对评分 helper                                |
+| `to_diy(...)` / `to_diy_batch(...)`                       | CLI 对齐的导出 helper                                               |
+| `icon_info(name)` / `parse_group_lines(...)`              | CLI 对齐的图标元信息 / 分组解析 helper                              |
+| `battle_replay(raw_input, options?)`                       | 跨语言统一的完整 UI 回放；返回 JSON-compatible replay shape         |
+
+### BattleSession（正式对局 API）
+
+稳定 TypeScript literal 类型：
+
+- `BattleMinionKind`：`clone | summon | shadow | zombie`，用于 `BattlePlayerState.minion_kind`（另允许 null）。
+- `BattleUpdateType`：`win | none | next_line`，用于 `BattleUpdate.update_type`。
+- `BattleTone`：`normal | damage | recover | knockout | status_exit`，用于 `BattleUpdate.tone` 和 `BattleReplayClip.tone`。
+- `BattleReplayTextPartKind`：`text | highlight | player | data`，用于 `BattleReplayTextPart.kind`。
+
+`player_type`、`color`、message 和 `status_labels` 仍使用字符串类型；上述 literal 别名不改变对应字段的运行时表示。
+
+Runtime error 后会话进入 sticky failure（poisoned）：`is_failed() = true`，`is_done() = false`，`result()` 与 `stop_reason()` 为 None / null，`status()` 仍为 running，不是 truncated。`is_done()` 只表示已产生正常 terminal BattleResult；后续 `next_frame()` 返回同一错误 code 和 message。调用方应停止推进并释放 session；`is_failed()` 是查询方法，不增加 DTO 字段或 BattleStatus 枚举值。
+
+```js
+const session = new wasm.BattleSession("alpha\n\nbeta", { include_icons: false, max_rounds: 20_000 });
+try {
+  console.log(session.initial_states());
+  for (let frame; (frame = session.next_frame()) !== null;) {
+    console.log(frame.frame_index, frame.round_index);
+  }
+  console.log(session.result());
+} finally {
+  session.free();
+}
+```
+
+完整方法与 DTO 见 [公共 API](../../docs/reference/public-api.md)。返回值为 plain JS object，缺省值为 null，TypeScript 类型随生成包导出。`max_rounds` 包含空 round；terminal next_frame 幂等。`battle_replay` 仅收集同一个 session。
+
+示例页面先显示 initial states，再逐帧拉取，最多预取 2 帧；昵称与图标只装饰显示层。`?perf=1` 输出性能统计，参见 [性能基线](../../docs/perf/reports/web-streaming-baseline.md)。
+
+### FightSession（Advanced / Compatibility）
+
+适合逐回合播动画：
+
+```js
+const session = new wasm.FightSession(rawInput, {
+  eval_rq: 0.5, // 可选，名称评分参数
+  include_icons: true, // 可选，是否生成 PNG Base64 头像
+  capture_replay: true, // 可选，是否捕获逐帧回放（默认 true）
+});
+session.players(); // PlayerMeta[] — 玩家元数据列表
+session.state(); // PlayerState[] — 当前全量状态快照
+session.step(); // RoundFrame — 推进一步
+//   { finished, winner_ids, updates, rows, states, total_delay }
+session.is_finished(); // bool — 是否已产生胜者
+session.winner_ids(); // number[] — 获胜方 ID 列表
+session.run_to_end(limit); // FightReplay — 仅限制本次收集帧数；未完成可继续
+session.is_done(); // 包括正常结束和截断
+session.free(); // 显式释放
+```
+
+### WinRateSession
+
+增量式胜率统计：每次 `step()` 同步执行一批对局。浏览器调用方应在批次之间让出事件循环，或放入 Web Worker；直接同步循环仍会占用主线程。以下示例放在 async 函数或 ES module 中执行：
+
+```js
+const session = new wasm.WinRateSession(rawInput, 5000, {
+  eval_rq: 0.8, // 可选，名称评分参数（默认 win_rate_eval_rq()）
+  thread: 1, // 可选，wasm 目标只接受 0（自动）或 1（单线程）
+});
+try {
+  session.eval_rq(); // number — 当前 eval_rq 值
+  while (!session.is_finished()) {
+    session.step(100); // batch_size 可选，默认 100；返回 WinRateProgress
+    console.log(session.progress()); // { done, rounds_done, total_rounds, wins, percent }
+    await new Promise(resolve => setTimeout(resolve, 0)); // 批次之间交还控制权
+  }
+  session.result(); // WinRateResult — 含 timing（init_nanos, fight_nanos）
+} finally {
+  session.free();
+}
+```
+
+### 命名约定
+
+- 顶层函数、类方法和 JSON 字段统一使用 snake_case。
+- `options` 也使用 snake_case，例如 `eval_rq`、`include_icons`、`capture_replay`。
+
+### 数据模型
+
+| 类型                 | 说明                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PlayerMeta`         | 玩家元数据：`id`, `team_index`, `id_name`, `display_name`, `icon_png_base64?`                                                                          |
+| `PlayerState`        | 玩家状态：`hp`, `max_hp`, `shield`, `max_shield`, `magic_point`, `attack`, `defense`, …, `owner_id?`, `display_index`, `alive`, `status_labels?`（实时状态标签，如 `"聚气"`/`"隐匿"`/`"狂暴"`） |
+| `RoundFrame`         | 回合帧：`finished`, `winner_ids`, `updates[]`, `rows[]`, `states[]`, `total_delay`                                                                     |
+| `UpdateView`         | 单条更新消息：`caster_id`, `target_id`, `message_rendered`, `message_template`, `tone`, …                                                              |
+| `ReplayRow`          | 回放行：`indent`, `clips[]`；一般首行不缩进，后续行缩进                                                                                                 |
+| `ReplayClip`         | 回放片段：`delay`, `parts[]`, `color`（`[]` 高亮文字 6 位色号）, `tone`, `caster_ids[]`, `target_ids[]`, `sidebar_states[]`, `sidebar_previous_states[]`, `winner`；文本/玩家/血条/死亡特效语义均在 `parts[]` |
+| `ReplayTextPart`     | 文本片段：`kind`, `text`, `player_id?`, `show_hp`, `hp_before`, `hp_after`, `death_effect`, `emoji?`；`kind` 为 `text` / `highlight` / `player` / `data` |
+| `MessageTone`        | 消息色调：`"normal"` / `"damage"` / `"recover"` / `"knockout"` / `"status_exit"`                                                                        |
+| `FightReplay`        | 完整回放：`players`, `frames[]`, `winner_ids`, `final_states`                                                                                          |
+| `FightSummary`       | 轻量摘要：`finished`, `players`, `winner_ids`, `final_states`                                                                                          |
+| `WinRateProgress`    | 增量进度：`done`, `rounds_done`, `total_rounds`, `wins`, `percent`                                                                                     |
+| `WinRateResult`      | 最终结果：`done`, `rounds_done`, `total_rounds`, `wins`, `percent`, `timing?`                                                                          |
+| `WinRateTiming`      | 耗时统计：`init_nanos`, `fight_nanos`（wasm32 使用 `Date.now()` 毫秒计时后换算为纳秒，短批次可能为 0）                                                                                               |
+| `GroupWinRateResult` | 批量胜率结果：`opponent`, `result`                                                                                                                     |
+| `Cli*Result`         | 与 `tswn-cli` / `tswn_py` 高层 helper 对齐的一组结果类型                                                                                                |
+
+`display_index` 是底层分配的展示序号：普通本体为 `0`；同名分身在名字中显示为 `#1`、`#2`……。
+左侧仍会单独显示对象 `#playerId`，用于区分唯一对象编号。
+
+左侧玩家列表按输入顺序排列：分组与 `Team N` 标签都用 `BattlePlayerState.input_team_index`（输入里第几组，空行或 `@队名` 决定），组内按对象 id（也就是输入行序）排列；运行时 `team_index` 由对局内部分配、可能与输入相反，只参与胜负判定，不参与展示排序。召唤单位紧跟其主人，缺 `input_team_index` 的旧数据退回运行时分队号。
+
+`ReplayClip.delay` 按句子级规则给出：
+frame 首句 `900ms`，雷击/地裂行首句 `150ms`，展示血条的句子 `600ms`，其他句子 `500ms`，按该顺序优先匹配。
+同一句中的多个 `player` part 各自携带独立的 HP 前后值；生命之轮体力互换会强制双方都展示血条，即使某一方或双方 HP 没有变化。
+复活句会固定为 `0 -> 0`，随后“回复体力”句才输出 `0 -> x` 的回血血条，不受运行时帧快照中旧 HP 的影响。
+“`[2]变成了[1]`”等实体转化句会为旧对象和新对象分别输出 `player` part，因此 show 可继续对被转化对象应用普通名字与头像效果。
+死亡特效只读取死亡句中 player part 的 `death_effect`；附体、自爆或 owner 死亡牵连等机制死亡会由底层在“被击倒/消失”句同步 HP 为 `0`。任何 `death_effect == true` 的 player part 都会同时返回 `show_hp == false`。
+
+`examples/index.html` 的战斗正文渲染只消费 `BattleReplayFrame.rows[].clips[]` 结构化 replay view：分行、分段 delay、文本片段、高亮色、玩家 HP 条、死亡效果和侧栏快照均来自底层字段。前端不再从 `message_template`、`message_rendered` 或 `hp_delta` 反推展示语义；`updates[]` 仅保留给结算统计等非正文渲染用途。
+
+show 示例会完整保留 `initial_states`、帧内 `states` 与 `final_states` 的字段，角色详情优先读取当前可见快照，缺失时依次回退到历史、最终和初始快照。苏生 `0 -> x` 的 HP mini bar 只渲染回复段；角色名字是否使用阵亡样式只由对应 `player` part 的 `death_effect` 决定，不按 `alive` 猜测。
+
+normal 播放模式下，对战结束后会等待 `1500ms` 再显示底部结算表；fast、turbo 和单步跳转会即时显示。左侧玩家列表 HP 条使用较慢的过渡动画，以便看清血量变化。
+
+`examples/index.html` 支持通过 `?input=<url-safe-base64>` 直接传入 UTF-8 对局输入并自动播放；`replay` / `data` 可作为兼容别名，解码失败时会停留在输入面板并显示错误。右下角控制栏的分享按钮会复制当前对局对应的 `input` 链接。
+
+show 页面右下角控制栏还支持 `C/P/F/T/I/R/S/D` 字母快捷键；字母键在非编辑焦点且没有 Ctrl、Alt、Meta 修饰键时生效。已有的 `Space` 暂停/逐帧和方向键事件/帧步进行为保持不变，完整按键表见 [`examples/README.md`](examples/README.md#控制栏快捷键)。
+
+### 错误
+
+所有可能失败的函数返回 `WasmResult<T>`（即 `Result<T, JsValue>`），错误对象结构为 `{ code: string, message: string }`。
+
+正式 BattleSession 与 CLI 对齐 helper 使用 core 的六个稳定错误码：
+
+- `INVALID_INPUT` — 输入为空或格式错误
+- `INVALID_ARGUMENT` — 参数无效，或 options 无法解析（不再返回旧 `INVALID_OPTIONS`）
+- `RUNNER_INIT_FAILED` — Runner 初始化失败
+- `RUNTIME_FAILED` — Runtime 推进失败；会话保留首次错误
+- `INTERNAL_ERROR` — 内部转换或序列化异常
+- `UNSUPPORTED_OPTION` — 当前 wasm target 不支持所传选项（例如 `WinRateSession.thread > 1`）
+
+兼容胜率入口还保留 `WIN_RATE_INVALID_GROUPS`，表示至少需要两个非空分组。错误对象和失败后查询约定见 [公共 API](../../docs/reference/public-api.md#错误与其他高层-api)。
+
+`battle_replay(raw_input, { eval_rq?, include_icons?, max_rounds? })` 是推荐的一次性回放入口，返回初始/最终状态、逐回合 updates、`rows/clips/parts` 与赢家信息。`FightSession` / `WinRateSession` 保留为 Advanced API；WASM 目标下 WinRateSession 仅支持自动或单线程。
+
+### 实时状态标签
+
+`shield` 是当前实际吸收护盾；`max_shield` 是当前护盾技能熟练度，吞噬等技能变更后随快照更新，用作盾条展示上限而不是战斗规则的硬上限。规范 `BattlePlayerState` 与兼容 `PlayerState` 的初始、帧、片段前后和最终快照均包含这两个字段。
+
+`PlayerState.status_labels` 会在每个回合帧中收集玩家当前生效的技能运行时态和状态效果，前端可直接用于渲染状态提示 pill。
+
+正面状态（绿色）：`聚气`、`蓄力`、`隐匿`、`潜行`、`狂暴`、`疾走`、`铁壁`、`守护`
+
+负面状态（红色）：`魅惑`、`诅咒`、`冰冻`、`中毒`、`迟缓`、`垂死`
+
+`examples/index.html` 演示页面已内置状态标签渲染，在玩家面板中显示彩色 pill；侧栏和角色详情会从实时 `shield` 补出 `护盾 +数值`，不修改规范 `status_labels`。正文两条条形各按自己的变化出现：只有护盾变化时只画盾条并占用 HP 条槽位，HP 与护盾同时变化时盾条叠在 HP 底轨正上方（左端对齐、紧贴不重叠），详见 [示例说明](examples/README.md#indexhtml--完整对局动画展示)。
+
+### 头像 Sprite 渲染
+
+`examples/index.html` 演示页面使用 CSS Sprite 方式渲染玩家头像，不再生成大量 `<img src="data:...">` DOM 节点：
+
+- `show-utils.js` 提供 `iconClassName()` / `buildIconClassCss()` 工具函数，将玩家的 PNG Base64 头像编码为 `.icon_N { background-image: url(...) }` 样式规则。
+- `show.js` 在回放开始时调用 `normalizeReplayPlayers()` 为玩家补齐 `iconClassId`（同队统一使用队首个玩家头像编号），并通过 `syncIconStyles()` 动态注入 `<style>` 标签。
+- 渲染层（`show-render.js` `/` `show-replay.js`）统一使用 `renderIconSprite(iconId, className)` 生成 `<span class="icon-sprite icon_N">` 节点，头像图片由 CSS background-image 加载。
+- 角色详情面板的正文、属性标签和说明文字使用主题变量；白天模式下浅色详情卡片使用深色文字，深色模式下保持浅色文字，避免文字与背景同色。
+
+#### 同队头像统一
+
+多对多对局中，`withTeamIconClassIds()` 确保同队所有玩家共用该队第一个玩家的头像编号，保证整队头像视觉一致性。
+
+### 示例
+
+`examples/` 目录包含两套静态页面：
+
+| 文件                                 | 说明                                                                                                                               |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `demo.html` / `demo.js` / `demo.css` | 快速功能验证（战斗 + 胜率）                                                                                                        |
+| `index.html` / `show.js` / `show.css` | 完整对局动画展示                                                                                                                  |
+| `show-wasm.js`                       | WASM 模块加载与初始化                                                                                                              |
+| `show-utils.js`                      | DOM 渲染工具函数（含头像 Sprite 工具 `iconClassName()` / `buildIconClassCss()` / `withTeamIconClassIds()` / `renderIconSprite()`） |
+| `show-render.js`                     | 玩家状态 / 头像渲染（CSS Sprite 方式，`renderIconSprite()`）                                                                       |
+| `show-replay.js`                     | 逐帧回放逻辑 + 结算表格（支持 HP 条显示）                                                                                          |
+
+```bash
+# 构建 wasm 分发目录后启动静态服务器
+cd crates/tswn_wasm/dist/wasm
+python -m http.server 8000
+# 打开 http://127.0.0.1:8000/examples/demo.html
+# 或   http://127.0.0.1:8000/examples/
+```
+
+详细运行说明见 `examples/README.md`。
+
+### 测试
+
+前端回归测试集中在 [`tests/`](tests/README.md)，与示例页面分开，不随示例分发。在仓库根目录执行：
+
+```powershell
+# 前端测试：Bun 与 Node 任选一种
+bun test ./crates/tswn_wasm/tests
+node --test crates/tswn_wasm/tests/show-*.test.mjs
+
+# Rust 测试
+cargo test -p tswn_wasm
+```
+
+## 构建
+
+```powershell
+# 构建 wasm + wasm-bindgen 打包
+uv run scripts/build_wasm.py --release
+```
+
+前置依赖：`wasm32-unknown-unknown` target 和与根 [Cargo.lock](../../Cargo.lock) 中 `wasm-bindgen` **完全同版本**的 `wasm-bindgen-cli`。当前锁定版本是 `0.2.129`；脚本会校验版本匹配。
+
+```powershell
+rustup target add wasm32-unknown-unknown
+cargo install -f wasm-bindgen-cli --version 0.2.129
+```
+
+## 版本
+
+当前版本见 [CHANGELOG.md](CHANGELOG.md)。

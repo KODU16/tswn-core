@@ -1,0 +1,17 @@
+import tswn_py
+
+
+raw = """114514
+
+1919810
+seed:33554431@!"""
+
+groups, seed = tswn_py.Runner.split_namerena_into_groups(raw)
+prepared = tswn_py.Runner.prepare_groups(groups)
+runner = tswn_py.Runner.new_from_prepared_with_seed(prepared, seed)
+
+runner.run_to_completion()
+
+winner_team = runner.winner_team_index()
+print(f"winner_team={winner_team}")
+print(f"input_groups={runner.input_groups}")

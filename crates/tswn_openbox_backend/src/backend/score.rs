@@ -1,0 +1,227 @@
+//! 基准评分、线程口径与胜率汇总的内部适配。
+//!
+//! 对局与调度交给 core，本模块选择普通/胜率评估口径并聚合指标；百分比与计数
+//! 分别保存，显示舍入留给 format。计算失败通过 Result 返回，取消标记由任务层
+//! 共享，不在此层把中断当成完整排名。
+
+#[cfg(test)]
+use std::fmt::Write as _;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::types::NamerPfMetric;
+use tswn_core::runtime::runtime_score;
+#[cfg(test)]
+use tswn_core::runtime::{RuntimeRunner, runtime_groups_win_rate};
+
+#[cfg(test)]
+use super::format::display_group;
+#[cfg(test)]
+use super::parse::{first_duplicate_name_in_matchup, groups_have_same_players};
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct BenchSummary {
+    pub wins: usize,
+    pub total: usize,
+}
+
+#[cfg(test)]
+impl BenchSummary {
+    pub fn win_rate_percent(&self) -> f64 { self.wins as f64 * 100.0 / self.total.max(1) as f64 }
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchRateSummary {
+    pub avg: f64,
+    pub wins: usize,
+    pub total: usize,
+    pub valid_matchups: usize,
+    pub skipped_matchups: usize,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub enum BatchTargetOutcome {
+    Rate,
+    Skipped,
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub fn bench_batch_rate_for_group(
+    player: &str,
+    target_groups: &[String],
+    target_factors: Option<&[f64]>,
+    n: usize,
+    threads: Option<usize>,
+    eval_rq: f64,
+    verbose: bool,
+    verbose_buf: &mut String,
+    cancel: &AtomicBool,
+    mut tick_target: impl FnMut(usize, usize, &str, BatchTargetOutcome),
+) -> BatchRateSummary {
+    let mut accumulated_rate = 0.0;
+    let mut accumulated_wins = 0usize;
+    let mut accumulated_total = 0usize;
+    let mut accumulated_factor = 0.0;
+    let mut valid_matchups = 0usize;
+    let mut skipped_matchups = 0usize;
+    let factored = target_factors.is_some();
+
+    for (index, target) in target_groups.iter().enumerate() {
+        let factor = target_factors.and_then(|factors| factors.get(index)).copied().unwrap_or(1.0);
+        let target_total = target_groups.len();
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if factored && groups_have_same_players(player, target) {
+            const MIRROR_RATE: f64 = 50.0;
+            if verbose {
+                let _ = writeln!(
+                    verbose_buf,
+                    "  [{}/{}] vs {} => {MIRROR_RATE:.2}% (same players)",
+                    index + 1,
+                    target_total,
+                    display_group(target),
+                );
+            }
+            accumulated_rate += MIRROR_RATE * factor;
+            accumulated_factor += factor;
+            accumulated_wins += 1;
+            accumulated_total += 2;
+            valid_matchups += 1;
+            tick_target(index, target_total, target, BatchTargetOutcome::Rate);
+            continue;
+        }
+        if !factored && let Some(duplicate) = first_duplicate_name_in_matchup(&[player, target]) {
+            skipped_matchups += 1;
+            if verbose {
+                let _ = writeln!(
+                    verbose_buf,
+                    "  [{}/{}] vs {} => SKIP duplicate name: {}",
+                    index + 1,
+                    target_total,
+                    display_group(target),
+                    duplicate
+                );
+            }
+            tick_target(index, target_total, target, BatchTargetOutcome::Skipped);
+            continue;
+        }
+
+        let raw = format!("{player}\n\n{target}");
+        match bench_winrate_summary(&raw, n, threads, eval_rq) {
+            Ok(summary) => {
+                if verbose {
+                    let _ = writeln!(
+                        verbose_buf,
+                        "  [{}/{}] vs {} => {:.2}% ({}/{})",
+                        index + 1,
+                        target_total,
+                        display_group(target),
+                        summary.win_rate_percent(),
+                        summary.wins,
+                        summary.total
+                    );
+                }
+                accumulated_rate += summary.win_rate_percent() * factor;
+                accumulated_factor += factor;
+                accumulated_wins += summary.wins;
+                accumulated_total += summary.total;
+                valid_matchups += 1;
+                tick_target(index, target_total, target, BatchTargetOutcome::Rate);
+            }
+            Err(err) => {
+                skipped_matchups += 1;
+                if verbose {
+                    let _ = writeln!(
+                        verbose_buf,
+                        "  [{}/{}] vs {} => ERROR: {err}",
+                        index + 1,
+                        target_total,
+                        display_group(target)
+                    );
+                }
+                tick_target(index, target_total, target, BatchTargetOutcome::Skipped);
+            }
+        }
+    }
+
+    BatchRateSummary {
+        avg: if accumulated_factor > 0.0 {
+            accumulated_rate / accumulated_factor
+        } else {
+            0.0
+        },
+        wins: accumulated_wins,
+        total: accumulated_total,
+        valid_matchups,
+        skipped_matchups,
+    }
+}
+
+pub fn namer_pf_score(
+    base_group: &[String],
+    modifier: &str,
+    duplicate: bool,
+    n: usize,
+    threads: Option<usize>,
+    eval_rq: f64,
+) -> f64 {
+    let duplicated;
+    let target_group = if duplicate {
+        duplicated = base_group.iter().chain(base_group).cloned().collect::<Vec<_>>();
+        &duplicated
+    } else {
+        base_group
+    };
+    let thread = threads.and_then(|value| u32::try_from(value).ok()).unwrap_or(0);
+    runtime_score(target_group, modifier, n, eval_rq, thread)
+        .map(|summary| summary.wins as f64 * 10_000.0 / summary.total.max(1) as f64)
+        .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+fn bench_winrate_summary(raw: &str, n: usize, threads: Option<usize>, eval_rq: f64) -> Result<BenchSummary, String> {
+    let (groups, _) = RuntimeRunner::split_namerena_into_groups(raw.to_owned());
+    let thread = threads.and_then(|value| u32::try_from(value).ok()).unwrap_or(0);
+    runtime_groups_win_rate(&groups, n, eval_rq, thread)
+        .map(|summary| BenchSummary {
+            wins: summary.wins,
+            total: summary.total,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// 把 GUI 侧的线程设置转换成 [`tswn_core::bench_sched::low_accuracy_outer_workers`] 所需的口径。
+pub(super) fn outer_thread_spec(threads: Option<usize>) -> u32 { threads.and_then(|x| u32::try_from(x).ok()).unwrap_or(0) }
+
+pub(super) fn eval_rq(keep_rq: bool) -> f64 {
+    if keep_rq {
+        tswn_core::namerena::eval_name::DEFAULT_EVAL_RQ
+    } else {
+        tswn_core::namerena::eval_name::WIN_RATE_EVAL_RQ
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NamerPfScores {
+    pub pp: f64,
+    pub pd: f64,
+    pub qp: f64,
+    pub qd: f64,
+    pub sum: f64,
+}
+
+impl NamerPfScores {
+    pub(super) fn get(&self, metric: NamerPfMetric) -> f64 {
+        match metric {
+            NamerPfMetric::Pp => self.pp,
+            NamerPfMetric::Pd => self.pd,
+            NamerPfMetric::Qp => self.qp,
+            NamerPfMetric::Qd => self.qd,
+            NamerPfMetric::Sum => self.sum,
+        }
+    }
+}

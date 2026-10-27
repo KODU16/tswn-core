@@ -1,0 +1,254 @@
+//! 已提交数据集的字节、对局身份、抽样边界与机制引用校验。
+//!
+//! 先检查 manifest、目录范围和分片回执，再逐批读取 Parquet，对照每局 seed/切分/标签
+//! 以及模型 state 的引用约束。独立分片并行检查，错误按分片编号顺序汇总返回。
+//! 校验不重跑战斗，也不取得生成器目录锁；调用方须保证输入已完成且读取期间不被修改。
+
+use crate::{
+    BattleRow, DatasetConfig, SampleRow, input, random,
+    storage::{self, ShardReceipt},
+};
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+use tswn_core::cli_api::battle::BattleStopReason;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    pub battles: usize,
+    pub samples: usize,
+    pub resolved: usize,
+    pub truncated: usize,
+    pub failed: usize,
+    pub split_battles: BTreeMap<String, usize>,
+    pub stop_reasons: BTreeMap<String, usize>,
+    pub team_count_battles: BTreeMap<usize, usize>,
+}
+
+impl Summary {
+    pub(crate) fn add(&mut self, other: Self) {
+        self.battles += other.battles;
+        self.samples += other.samples;
+        self.resolved += other.resolved;
+        self.truncated += other.truncated;
+        self.failed += other.failed;
+        for (key, count) in other.split_battles {
+            *self.split_battles.entry(key).or_default() += count;
+        }
+        for (key, count) in other.stop_reasons {
+            *self.stop_reasons.entry(key).or_default() += count;
+        }
+        for (key, count) in other.team_count_battles {
+            *self.team_count_battles.entry(key).or_default() += count;
+        }
+    }
+}
+
+pub fn validate_dataset(out: &Path) -> Result<Summary> {
+    let config: DatasetConfig = storage::read_json(&out.join("manifest.json"))?;
+    let total = check_config(&config)?;
+    let shard_count = total.div_ceil(config.battles_per_shard);
+    check_layout(out, shard_count)?;
+    let mut summary = Summary::default();
+    // 分片之间没有引用，分别检查后按编号归并，避免错误报告随 worker 完成顺序变化。
+    let workers = std::thread::available_parallelism().map_or(1, usize::from).min(shard_count.max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::<(usize, Result<Summary>)>::with_capacity(shard_count));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= shard_count {
+                        break;
+                    }
+                    let (first, end) = crate::generate::range(&config, index, total);
+                    let dir = out.join(format!("shard-{index:06}"));
+                    let result = storage::check_receipt(&dir, first, end)
+                        .with_context(|| format!("检查分片 {index}"))
+                        .and_then(|receipt| validate_shard(&dir, &config, &receipt));
+                    results.lock().unwrap_or_else(|poison| poison.into_inner()).push((index, result));
+                }
+            });
+        }
+    });
+    let mut collected = results.into_inner().unwrap_or_else(|poison| poison.into_inner());
+    collected.sort_by_key(|(index, _)| *index);
+    for (index, result) in collected {
+        summary.add(result.with_context(|| format!("校验分片 {index}"))?);
+    }
+    ensure!(summary.battles == total, "总对局数不匹配");
+    Ok(summary)
+}
+
+/// 校验 manifest 内容并返回总对局数。
+pub(crate) fn check_config(config: &DatasetConfig) -> Result<usize> {
+    ensure!(
+        config.format_version == 1 && config.state_schema_version == tswn_core::runtime::model_state::MODEL_STATE_SCHEMA_VERSION,
+        "不支持的数据版本"
+    );
+    ensure!(
+        config.games_per_matchup > 0
+            && config.battles_per_shard > 0
+            && config.samples_per_game > 0
+            && config.max_rounds > 0
+            && config.eval_rq.is_finite(),
+        "manifest 配置无效"
+    );
+    ensure!(!config.cases.is_empty(), "manifest 没有阵容");
+    for case in &config.cases {
+        ensure!(
+            case.groups.len() >= 2 && case.groups.iter().all(|group| !group.is_empty()),
+            "阵容队伍无效"
+        );
+        ensure!(case.matchup_id == input::matchup_id(&case.groups), "阵容哈希不匹配");
+    }
+    config.cases.len().checked_mul(config.games_per_matchup).context("对局数溢出")
+}
+
+/// 输出目录里不能出现 manifest 之外的分片目录。
+fn check_layout(out: &Path, shard_count: usize) -> Result<()> {
+    let expected: BTreeSet<_> = (0..shard_count).map(|index| format!("shard-{index:06}")).collect();
+    for entry in std::fs::read_dir(out)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("shard-") {
+            ensure!(expected.contains(&name), "发现 manifest 之外的分片 {name}");
+        }
+    }
+    Ok(())
+}
+
+/// 汇总本轮各 worker 已回读校验过的分片摘要。
+///
+/// `generate` 覆盖全部分片时，每个分片在提交前都已由 `validate_shard` 回读校验；
+/// 这里只做数据集级检查并合并摘要，不再让 `validate_dataset` 把全部 Parquet
+/// 重解一遍。已有分片来自续跑时没有本轮摘要，仍必须走完整校验。
+pub(crate) fn summarize_fresh(config: &DatasetConfig, out: &Path, total: usize, parts: Vec<(usize, Summary)>) -> Result<Summary> {
+    let shard_count = total.div_ceil(config.battles_per_shard);
+    let expected_total = check_config(config)?;
+    ensure!(expected_total == total, "总对局数不匹配");
+    check_layout(out, shard_count)?;
+    ensure!(parts.len() == shard_count, "本轮分片摘要数量不匹配");
+    let mut summary = Summary::default();
+    for (_, part) in parts {
+        summary.add(part);
+    }
+    ensure!(summary.battles == total, "总对局数不匹配");
+    Ok(summary)
+}
+
+pub(crate) fn validate_shard(dir: &Path, config: &DatasetConfig, receipt: &ShardReceipt) -> Result<Summary> {
+    let mut summary = Summary::default();
+    let mut battles = Vec::new();
+    storage::read_rows::<BattleRow>(&dir.join("battles.parquet"), |row| {
+        let expected_id = receipt.first_battle + battles.len();
+        ensure!(
+            row.battle_id == expected_id as u64 && expected_id < receipt.end_battle,
+            "对局顺序或范围不正确"
+        );
+        ensure!(row.case_index == expected_id / config.games_per_matchup, "对局阵容编号不正确");
+        let case = config.cases.get(row.case_index).context("无效阵容编号")?;
+        ensure!(
+            row.matchup_id == case.matchup_id && row.split == random::split(&case.matchup_id),
+            "阵容切分不正确"
+        );
+        ensure!(
+            row.seed == random::battle_seed(&config.seed, &case.matchup_id, row.battle_id),
+            "战斗 seed 不正确"
+        );
+        ensure!(
+            row.outcome.rounds_advanced <= config.max_rounds && row.outcome.frames_emitted <= row.outcome.rounds_advanced,
+            "终止计数不正确"
+        );
+        match (row.outcome.stop_reason, row.outcome.winner_team_indices.as_slice()) {
+            (BattleStopReason::Winner, [winner]) => {
+                ensure!(*winner < case.groups.len(), "胜者编号越界");
+                summary.resolved += 1;
+            }
+            (BattleStopReason::MaxRounds | BattleStopReason::NoProgress, []) => {
+                summary.truncated += 1;
+            }
+            _ => anyhow::bail!("已决胜者必须唯一，截断不能携带胜者"),
+        }
+        if row.outcome.stop_reason == BattleStopReason::MaxRounds {
+            ensure!(row.outcome.rounds_advanced == config.max_rounds, "max_rounds 终止计数不正确");
+        }
+        let eligible = row
+            .outcome
+            .frames_emitted
+            .saturating_sub(usize::from(row.outcome.stop_reason == BattleStopReason::Winner));
+        let expected_samples = if row.outcome.rounds_advanced == 0 {
+            0
+        } else {
+            config.samples_per_game.min(eligible + 1)
+        };
+        ensure!(row.samples == expected_samples, "抽样数量不正确");
+        summary.battles += 1;
+        *summary.split_battles.entry(row.split.clone()).or_default() += 1;
+        *summary.stop_reasons.entry(format!("{:?}", row.outcome.stop_reason)).or_default() += 1;
+        *summary.team_count_battles.entry(case.groups.len()).or_default() += 1;
+        battles.push(row);
+        Ok(())
+    })?;
+    ensure!(battles.len() == receipt.battles, "对局行数与回执不匹配");
+    let mut counts = vec![0; battles.len()];
+    let mut previous: Option<(u64, usize)> = None;
+    storage::read_rows::<SampleRow>(&dir.join("samples.parquet"), |row| {
+        let index = (row.battle_id as usize).checked_sub(receipt.first_battle).context("样本对局越界")?;
+        let battle = battles.get(index).context("样本对局越界")?;
+        ensure!(
+            row.matchup_id == battle.matchup_id && row.split == battle.split,
+            "样本与对局切分不一致"
+        );
+        ensure!(
+            row.winner_team_index == battle.outcome.winner_team_indices.first().copied(),
+            "样本胜者标签不正确"
+        );
+        ensure!(
+            row.state.input_teams.len() == config.cases[battle.case_index].groups.len(),
+            "状态输入队伍数不一致"
+        );
+        ensure!(
+            row.rounds_advanced <= battle.outcome.rounds_advanced && row.state.round == row.rounds_advanced as u64,
+            "样本轮数不正确"
+        );
+        ensure!(row.state.world.winner_team.is_none(), "样本包含已决胜者");
+        if battle.outcome.stop_reason == BattleStopReason::Winner {
+            ensure!(row.rounds_advanced < battle.outcome.rounds_advanced, "不得采样已决终局");
+        }
+        let expected_progress = row.rounds_advanced as f64 / battle.outcome.rounds_advanced.max(1) as f64;
+        ensure!(
+            row.progress.is_finite() && (row.progress - expected_progress).abs() < 1e-12,
+            "审计进度不正确"
+        );
+        match row.frame {
+            None => ensure!(row.rounds_advanced == 0 && counts[index] == 0, "初始状态必须为本局第一行"),
+            Some(frame) => {
+                ensure!(counts[index] > 0, "本局缺少初始状态");
+                ensure!(
+                    frame.frame_index < battle.outcome.frames_emitted
+                        && frame.rounds_advanced == row.rounds_advanced
+                        && frame.round_index + 1 == row.rounds_advanced,
+                    "帧边界不正确"
+                );
+            }
+        }
+        let key = (row.battle_id, row.rounds_advanced);
+        ensure!(previous.is_none_or(|last| last < key), "样本重复或行序不正确");
+        previous = Some(key);
+        row.state.validate()?;
+        counts[index] += 1;
+        summary.samples += 1;
+        Ok(())
+    })?;
+    ensure!(summary.samples == receipt.samples, "样本行数与回执不匹配");
+    ensure!(
+        counts.iter().zip(&battles).all(|(count, battle)| *count == battle.samples),
+        "每局样本数量不匹配"
+    );
+    Ok(summary)
+}

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=84.2.1", "wheel>=0.48.0", "setuptools-rust>=1.13.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tswn_py"
+dynamic = ["version"]
+description = "Python bindings for tswn_core (PyO3)"
+requires-python = ">=3.12"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+]
+dependencies = []
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tswn_py*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tswn_py._version.__version__" }
+
+[tool.setuptools.package-data]
+tswn_py = ["__init__.py", "*.pyi", "py.typed"]
+
+# setuptools-rust 配置：
+# target  = Python dotted path，决定扩展模块在包内的位置（tswn_py/tswn_py.*.pyd）
+# path    = Cargo.toml 相对于本文件的路径（同目录，可省略，显式写出更清晰）
+# binding = PyO3（对应 lib.rs 中的 #[pymodule]）
+[[tool.setuptools-rust.ext-modules]]
+target = "tswn_py.tswn_py"
+path = "Cargo.toml"
+binding = "PyO3"
+strip = "No"

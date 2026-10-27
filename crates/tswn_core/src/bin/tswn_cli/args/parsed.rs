@@ -1,0 +1,321 @@
+//! `tswn-cli` 在执行阶段使用的内部命令模型。
+//!
+//! 这一层故意不再暴露 `clap` 的结构细节。执行代码只关心“已经归一化之后的命令”，
+//! 不关心这些值究竟来自 `--raw`、`--file` 还是 stdin，也不关心 `clap` 的字段命名。
+
+use std::path::PathBuf;
+
+/// 基准测试线程策略。
+///
+/// 这里保留一个非常薄的枚举，而不是直接把 `thread: Option<usize>` 暴露给执行层，
+/// 是因为“显式单线程”和“未指定线程但允许并行”是两个不同的语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchThreadMode {
+    /// 自动或显式并行运行基准测试。
+    Parallel,
+    /// 强制使用单线程运行基准测试。
+    SingleThread,
+}
+
+/// `namer-pf` 可单独运行的评分项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamerPfMode {
+    Pp,
+    Pd,
+    Qp,
+    Qd,
+}
+
+impl NamerPfMode {
+    pub fn score_params(self) -> (&'static str, bool) {
+        match self {
+            Self::Pp => ("\u{0002}", false),
+            Self::Pd => ("\u{0002}", true),
+            Self::Qp => ("!", false),
+            Self::Qd => ("!", true),
+        }
+    }
+}
+
+/// `namer-pf` 面向用户的评分项，含 openbox GUI 特有的 `sum` 总项。
+///
+/// 与 [`NamerPfMode`] 刻意分开：后者只表示四个可直接运行的基准项，
+/// 前者是五个输出项，其中 `sum` 由四项求和派生、不单独跑基准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NamerPfMetric {
+    Pp,
+    Pd,
+    Qp,
+    Qd,
+    Sum,
+}
+
+impl NamerPfMetric {
+    /// openbox GUI 的固定输出顺序；`--metric` 的传入顺序不影响最终输出顺序。
+    pub const ALL: [Self; 5] = [Self::Pp, Self::Pd, Self::Qp, Self::Qd, Self::Sum];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pp => "pp",
+            Self::Pd => "pd",
+            Self::Qp => "qp",
+            Self::Qd => "qd",
+            Self::Sum => "sum",
+        }
+    }
+}
+
+/// `namer-pf --metric` 的单项配置，对应 openbox GUI 中单个评分项的复选框行。
+///
+/// 由 `NAME[:MIN_SCREEN[:FILE[:MIN_FILE]]]` 语法解析而来。屏幕输出与否由顶层
+/// `--no-screen` 统一控制，不做逐项屏幕开关（对齐 GUI 复选框矩阵的常用子集）。
+#[derive(Debug, Clone)]
+pub struct NamerPfMetricSpec {
+    pub metric: NamerPfMetric,
+    pub min_screen: Option<f64>,
+    pub output_file: Option<PathBuf>,
+    pub min_file: Option<f64>,
+}
+
+/// `pair` 的 cqp 详情模式，对齐 openbox GUI 的三选一。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairDetailMode {
+    /// 不输出 cqp 详情。
+    None,
+    /// 输出所有不低于 `--detail-min` 的队友组合。
+    Every,
+    /// 只输出最终取分的前 `head` 个队友组合。
+    Top,
+}
+
+/// 归一化后的 CLI 命令。
+///
+/// 这里的每个字段都已经过输入来源统一、基础校验和必要的文本转换：
+/// - 命令行 `--raw` 字符串已完成字面量 `\n` 还原，文件与 stdin 保留文本中的换行语义；
+/// - 列表文件已经被读入并拆成执行阶段需要的结构；
+/// - 线程模式已经从 `--single-thread` / `--thread` 整理成统一表示。
+#[derive(Debug)]
+pub enum ParsedCommand {
+    Fight {
+        jsonl: bool,
+        max_rounds: usize,
+        /// 普通对战输入，使用 namerena raw 格式。
+        raw: String,
+    },
+    RuntimeDiff {
+        /// 普通对战输入，使用 namerena raw 格式，并按 runner diff 的格式输出。
+        raw: String,
+    },
+    RuntimeNormalizedRun {
+        /// 使用默认 custom runtime profile 运行的 namerena raw 输入。
+        raw: String,
+        /// 最多推进的回合数。
+        max_rounds: usize,
+    },
+    BenchAuto {
+        /// 基准测试原始输入，按组数自动分流到评分或胜率测试。
+        raw: String,
+        /// 基准测试模拟场数。
+        n: usize,
+        /// 基准测试线程模式。
+        mode: BenchThreadMode,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否输出 total/init/fight 耗时统计。
+        perf: bool,
+        /// 分段输出步长（每 N 场输出一次累积胜率）。
+        buckets_step: Option<usize>,
+    },
+    BenchWinRate {
+        /// 第一队输入，格式与普通输入中的单组相同。
+        team1: String,
+        /// 第二队输入，格式与普通输入中的单组相同。
+        team2: String,
+        /// 每组对局的模拟场数。
+        n: usize,
+        /// 基准测试线程模式。
+        mode: BenchThreadMode,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否输出 total/init/fight 耗时统计。
+        perf: bool,
+        /// 是否保持 `rq=4`，不模拟 JS `win_rate` 对 `rq` 的污染。
+        keep_rq: bool,
+        /// 分段输出步长（每 N 场输出一次累积胜率）。
+        buckets_step: Option<usize>,
+    },
+    BenchGroupWinRate {
+        /// 靶子组输入，格式与普通输入中的单组相同。
+        target: String,
+        /// 对手组列表，每项都支持单人或整组输入。
+        against: Vec<String>,
+        /// 每组对局的模拟场数。
+        n: usize,
+        /// 基准测试线程模式。
+        mode: BenchThreadMode,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否输出 total/init/fight 耗时统计。
+        perf: bool,
+        /// 是否保持 `rq=4`，不模拟 JS `win_rate` 对 `rq` 的污染。
+        keep_rq: bool,
+    },
+    BenchBatchRate {
+        /// 靶子组列表；每项都已从 `+` 分隔行转换成 `\n` 分隔的 namerena 组字符串。
+        target_groups: Vec<String>,
+        /// 与 `target_groups` 对应的靶子权重；普通文本靶子全部为 `1.0`。
+        target_factors: Vec<f64>,
+        /// 是否按带权靶子规则处理重名与平均值。
+        target_factored: bool,
+        /// 选手组列表；每项都已从 `+` 分隔行转换成 `\n` 分隔的 namerena 组字符串。
+        player_groups: Vec<String>,
+        /// 选手组展示标签，保留文件中的原始行文本。
+        player_labels: Vec<String>,
+        /// 每组对局的模拟场数。
+        n: usize,
+        /// 基准测试线程模式。
+        mode: BenchThreadMode,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否输出 total/init/fight 耗时统计。
+        perf: bool,
+        /// 是否输出逐个靶子的明细胜率。
+        verbose: bool,
+        /// 是否以块状格式输出逐个靶子的胜率明细（对齐 openbox“每组胜率”）。
+        show_matchups: bool,
+        /// 批量结果输出文件；未指定时输出到标准输出。
+        out_file: Option<PathBuf>,
+        /// 若输出文件已存在，是否直接覆盖而不再确认。
+        force: bool,
+        /// 是否保持 `rq=4`，不模拟 JS `win_rate` 对 `rq` 的污染。
+        keep_rq: bool,
+        /// 仅在输出到文件时生效：输出 JSONL；未启用时默认每行输出 `winrate<space>name`。
+        log: bool,
+        /// 仅在输出到文件时生效：每行只输出 `name`。
+        pure: bool,
+        /// 仅在终端显示平均胜率不低于此值的选手（0~100）。
+        min_screen: Option<f64>,
+        /// 仅在输出到文件时生效：只写入平均胜率不低于此值的选手（0~100）。
+        min_file: Option<f64>,
+        /// 胜率小数位数。
+        wr_precision: usize,
+        /// 输出文件是否按分数降序重排（对齐 openbox 的排序输出）。
+        sort: bool,
+        /// 展示标签是否剥掉 `+ol:` / `+diy[` 覆盖后缀（对齐 openbox 的标签清洗）。
+        clean_label: bool,
+    },
+    BenchPair {
+        /// 靶子组列表；每项都已从 `+` 分隔行转换成 `\n` 分隔的 namerena 组字符串。
+        target_groups: Vec<String>,
+        /// 与 `target_groups` 对应的靶子权重；普通文本靶子全部为 `1.0`。
+        target_factors: Vec<f64>,
+        /// 是否按带权靶子规则处理重名与平均值。
+        target_factored: bool,
+        /// 队友列表是否按带权 TOML 解析（与 `--target-factored` 同款格式）。
+        teammate_factored: bool,
+        /// 与队友列表对应的权重；普通文本队友全部为 `1.0`。
+        teammate_factors: Vec<f64>,
+        /// `player-list` 文件中的选手组合，已将组内成员拆为换行分隔的 raw。
+        players: Vec<String>,
+        /// 选手组合的原始行标签。
+        player_labels: Vec<String>,
+        /// `teammate-list` 文件中的队友组合，已将组内成员拆为换行分隔的 raw。
+        teammates: Vec<String>,
+        /// 队友组合的原始行标签。
+        teammate_labels: Vec<String>,
+        /// 每名选手取最高的 `head` 个二人组 `batch-rate` 结果求和。
+        head: usize,
+        /// 每组对局的模拟场数。
+        n: usize,
+        /// 基准测试线程模式。
+        mode: BenchThreadMode,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否输出 total/init/fight 耗时统计。
+        perf: bool,
+        /// 是否输出逐个靶子的明细胜率。
+        verbose: bool,
+        /// cqp 详情模式；`Every` 时按 `detail_min` 过滤，`Top` 时取前 `head` 个。
+        detail: PairDetailMode,
+        /// `detail = Every` 时的队友组合 cqp 阈值；其他模式下忽略。
+        detail_min: Option<f64>,
+        /// 批量结果输出文件；未指定时只输出到终端。
+        out_file: Option<PathBuf>,
+        /// 若输出文件已存在，是否直接覆盖而不再确认。
+        force: bool,
+        /// 是否保持 `rq=4`，不模拟 JS `win_rate` 对 `rq` 的污染。
+        keep_rq: bool,
+        /// 仅在输出到文件时生效：输出 JSONL。
+        log: bool,
+        /// 仅在输出到文件时生效：每行只输出 `name`。
+        pure: bool,
+        /// 仅在终端显示最终分数不低于此值的选手。
+        min_screen: Option<f64>,
+        /// 仅在输出到文件时生效：只写入最终分数不低于此值的选手。
+        min_file: Option<f64>,
+        /// 胜率小数位数。
+        wr_precision: usize,
+        /// 输出文件是否按最终分数降序重排（对齐 openbox 的排序输出）。
+        sort: bool,
+        /// 展示标签是否剥掉 `+ol:` / `+diy[` 覆盖后缀（对齐 openbox 的标签清洗）。
+        clean_label: bool,
+    },
+    NamerPf {
+        /// 每行一个名字组，组内可用 `+` 分隔。
+        raw: String,
+        /// 每个评分项的模拟场数。
+        n: usize,
+        /// 显式指定的基准测试线程数。
+        threads: Option<usize>,
+        /// 是否保持 `rq=4`，不模拟 JS `win_rate` 对 `rq` 的污染。
+        keep_rq: bool,
+        /// 输出保留的小数位数。
+        precision: usize,
+        /// 各评分项的输出配置；未显式传入时已归一化为五项全部输出到屏幕。
+        metrics: Vec<NamerPfMetricSpec>,
+        /// 是否只写文件、不在屏幕输出（需至少一个评分项配置了 FILE）。
+        no_screen: bool,
+        /// 技能榜阈值配置（TOML）；指定后强制计算全部四项评分。
+        skill_board_config: Option<PathBuf>,
+        /// 技能榜结果输出文件；未指定时只输出到屏幕。
+        skill_board_output: Option<PathBuf>,
+    },
+    IconShow {
+        /// 要展示图标的玩家名字列表。
+        names: Vec<String>,
+    },
+    IconB64 {
+        /// 要导出 base64 PNG 的玩家名字列表。
+        names: Vec<String>,
+    },
+    IconSave {
+        /// 图标输出目录。
+        dir: PathBuf,
+        /// 要保存图标的玩家名字列表。
+        names: Vec<String>,
+    },
+    ToDiy {
+        /// 玩家名字列表（namerena raw 格式）。
+        names: Vec<String>,
+        /// 是否为文件批量模式。
+        from_file: bool,
+        /// 输出文件；未指定时输出到标准输出。
+        out_file: Option<PathBuf>,
+        /// 是否输出旧版 `+diy` 形式；默认输出 `+ol` 形式。
+        old: bool,
+        /// 是否在 `+ol` 中附带幻影 / 使魔 / 丧尸模板。
+        minions: bool,
+        /// 单号模式是否附加输出原始信息详情（默认开启，`--no-details` 可关闭）。
+        details: bool,
+    },
+}
+
+/// 解析后的 CLI 容器。
+///
+/// 当前只包一层 `command`，保留这个壳是为了给后续增加全局运行选项留出稳定扩展点，
+/// 不必在 `main` 和执行模块之间反复改签名。
+#[derive(Debug)]
+pub struct ParsedCli {
+    /// 解析完成后的 CLI 命令。
+    pub command: ParsedCommand,
+}

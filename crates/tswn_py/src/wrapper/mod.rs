@@ -1,0 +1,300 @@
+//! Python 可见类型封装。
+//!
+//! 本模块把 `tswn_core` 的核心类型包成 `pyclass`：`Runner` 用于逐场对局，
+//! `PreparedRunner` 用于复用解析结果跑批量胜率，子模块则分别封装 RC4、回放和错误类型。
+//! 返回的更新、列表和 RC4 是副本，不是运行时的可变视图。低层 Runner 主要保留
+//! 机制诊断接口，规范流式结果和 Runtime 失败处理优先使用顶层 BattleSession。
+
+use pyo3::{Py, PyAny, PyResult, Python, pyclass, pymethods};
+use tswn_core::{
+    PreparedRunner as CorePreparedRunner, RunUpdate, RunUpdates, Runner, runtime::EntityIdx, runtime::PlrId,
+    runtime::update::UpdateType,
+};
+
+pub mod error;
+pub mod rc4;
+pub mod replay;
+
+/// 持有可复用阵容模板及固定评估口径的 Python 对象。
+///
+/// 每场 runner 独立创建运行时，模板不会随对局推进；无需手动释放。换评估口径需
+/// 重新 prepare，win_rate 的可选 eval_rq 仅用于一致性校验。
+#[pyclass]
+#[pyo3(name = "PreparedRunner")]
+pub struct PyPreparedRunner {
+    pub inner: CorePreparedRunner,
+    pub eval_rq: f64,
+}
+
+#[pymethods]
+impl PyPreparedRunner {
+    #[pyo3(signature = (n, eval_rq=None, thread=0))]
+    pub fn win_rate(&self, n: usize, eval_rq: Option<f64>, thread: u32) -> PyResult<f64> {
+        if let Some(eval_rq) = eval_rq
+            && eval_rq.to_bits() != self.eval_rq.to_bits()
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "eval_rq is fixed when the PreparedRunner is created",
+            ));
+        }
+        crate::run_prepared_win_rate(&self.inner, n, thread)
+    }
+
+    #[getter]
+    pub fn eval_rq(&self) -> f64 { self.eval_rq }
+}
+
+impl From<CorePreparedRunner> for PyPreparedRunner {
+    fn from(value: CorePreparedRunner) -> Self {
+        Self {
+            inner: value,
+            eval_rq: tswn_core::namerena::eval_name::DEFAULT_EVAL_RQ,
+        }
+    }
+}
+
+/// 独占可变对局状态的低层 Python 对象，构造失败抛出 RunnerError。
+///
+/// 推进方法原地修改对象；属性列表、快照及 RC4 getter 都返回独立副本。
+/// `run_to_completion` 的 false 无法区分无进展和回合截断，需要原因时改用 BattleSession。
+#[pyclass]
+#[pyo3(name = "Runner")]
+pub struct PyRunner {
+    pub inner: Runner,
+}
+
+#[pymethods]
+impl PyRunner {
+    #[staticmethod]
+    fn new_from_namerena_raw(raw_str: String) -> PyResult<Self> {
+        Ok(Self {
+            inner: Runner::new_from_namerena_raw(raw_str).map_err(error::PyRunnerError::new)?,
+        })
+    }
+
+    #[staticmethod]
+    fn split_namerena_into_groups(raw_str: String) -> (Vec<Vec<String>>, Vec<String>) {
+        Runner::split_namerena_into_groups(raw_str)
+    }
+
+    #[staticmethod]
+    fn new_from_groups_with_seed(groups: Vec<Vec<String>>, seed: Vec<String>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Runner::new_from_groups_with_seed(&groups, &seed).map_err(error::PyRunnerError::new)?,
+        })
+    }
+
+    #[staticmethod]
+    fn new_from_groups_with_seed_and_eval_rq(groups: Vec<Vec<String>>, seed: Vec<String>, eval_rq: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: Runner::new_from_groups_with_seed_and_eval_rq(&groups, &seed, eval_rq).map_err(error::PyRunnerError::new)?,
+        })
+    }
+
+    #[staticmethod]
+    fn prepare_groups(groups: Vec<Vec<String>>) -> PyResult<PyPreparedRunner> {
+        Runner::prepare_groups(&groups)
+            .map(|inner| PyPreparedRunner {
+                inner,
+                eval_rq: tswn_core::namerena::eval_name::DEFAULT_EVAL_RQ,
+            })
+            .map_err(|err| error::PyRunnerError::new(err).into())
+    }
+
+    #[staticmethod]
+    fn prepare_groups_with_eval_rq(groups: Vec<Vec<String>>, eval_rq: f64) -> PyResult<PyPreparedRunner> {
+        Runner::prepare_groups_with_eval_rq(&groups, eval_rq)
+            .map(|inner| PyPreparedRunner { inner, eval_rq })
+            .map_err(|err| error::PyRunnerError::new(err).into())
+    }
+
+    #[staticmethod]
+    fn new_from_prepared_with_seed(prepared: &PyPreparedRunner, seed: Vec<String>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Runner::new_from_prepared_with_seed(&prepared.inner, &seed).map_err(error::PyRunnerError::new)?,
+        })
+    }
+
+    /// 原地推进一个主回合，返回独立拥有的 RunUpdates；保留结果不要求保留 runner。
+    pub fn main_round(&mut self) -> PyRunUpdates { self.inner.main_round().into() }
+
+    /// 同步推进至胜者、无进展或绑定回合上限；false 不代表对局一定失败，也不会给出终止原因。
+    pub fn run_to_completion(&mut self) -> bool { self.inner.run_binding_to_completion() }
+
+    /// 返回原始输入顺序对应的队伍 roster（不受内部排序影响）
+    #[getter]
+    pub fn get_input_groups(&self) -> Vec<Vec<PlrId>> {
+        self.inner
+            .input_groups
+            .iter()
+            .map(|group| group.iter().map(|entity| entity.0 as PlrId).collect())
+            .collect()
+    }
+
+    /// 查询指定玩家在原始输入中的队伍下标
+    pub fn player_input_group_index(&self, player_id: PlrId) -> Option<usize> {
+        let entity = EntityIdx(player_id.try_into().ok()?);
+        self.inner.input_groups.iter().position(|group| group.contains(&entity))
+    }
+
+    /// 返回当前 RC4 状态的克隆；修改该对象不会改变 runner 后续随机数序列。
+    #[getter]
+    pub fn get_rc4(&self) -> rc4::PyRC4 { self.inner.runtime.rng.clone().into() }
+
+    /// 是否有赢家
+    pub fn have_winner(&self) -> bool { self.inner.have_winner() }
+
+    /// 获取已经获胜的输入队伍索引。
+    pub fn winner_team_index(&self) -> Option<usize> { self.inner.winner_team_index() }
+
+    /// 获取所有已经获胜的输入队伍索引。
+    pub fn winner_team_indices(&self) -> Vec<usize> { self.inner.winner_team_indices() }
+
+    /// 获取当前所有运行时实体的标准快照。
+    pub fn snapshot_players(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let snapshots = replay::snapshot_players(&self.inner);
+        Ok(replay::snapshots_to_pylist(py, &snapshots)?.into_any().unbind())
+    }
+
+    /// 从当前状态继续推进并收集兼容 timeline，不会从初始状态重新开局。
+    ///
+    /// limit 限制可见事件数量，不是回合数；回合边界推进可能使 frames 包含整个回合，
+    /// 而扁平 events 仅含到上限为止的事件。返回大量独立快照，内存随收集量增长。
+    #[pyo3(signature = (limit=None))]
+    pub fn build_replay(&mut self, py: Python<'_>, limit: Option<usize>) -> PyResult<Py<PyAny>> {
+        replay::build_replay(py, &mut self.inner, limit)
+    }
+
+    /// 获取所有存活玩家（扁平）
+    pub fn alives_flat(&self) -> Vec<PlrId> { self.inner.alive_player_ids() }
+
+    /// 获取所有存活玩家（按组）
+    pub fn alives(&self) -> Vec<Vec<PlrId>> { self.inner.alive_player_groups() }
+
+    /// 获取所有玩家 ID（包含已死亡）
+    pub fn all_plrs(&self) -> Vec<PlrId> { self.inner.all_player_ids() }
+
+    /// 获取玩家总数（包含已死亡）
+    pub fn all_plr_len(&self) -> usize { self.inner.runtime.entities.len() }
+}
+
+/// 独立持有一回合更新的 Python 集合，可在原 runner 推进或销毁后继续读取。
+///
+/// updates getter 克隆每条更新；clear/reset 只清空本集合，不修改已经取出的更新对象。
+/// no_capture 集合可记录发生过更新但不保存事件，len 与 had_updates 的含义因此不同。
+#[pyclass]
+#[pyo3(name = "RunUpdates")]
+#[derive(Default)]
+pub struct PyRunUpdates {
+    pub inner: RunUpdates,
+}
+
+#[pymethods]
+impl PyRunUpdates {
+    #[new]
+    pub fn new() -> Self { Self::default() }
+
+    #[staticmethod]
+    pub fn new_no_capture() -> Self {
+        Self {
+            inner: RunUpdates::new_no_capture(),
+        }
+    }
+
+    pub fn clear(&mut self) { self.inner.reset(); }
+
+    pub fn reset(&mut self) { self.inner.reset(); }
+
+    #[getter]
+    pub fn get_id(&self) -> u64 { self.inner.id }
+
+    #[getter]
+    pub fn get_capture_updates(&self) -> bool { self.inner.capture_updates }
+
+    #[getter]
+    pub fn get_updates(&self) -> Vec<PyRunUpdate> { self.inner.updates.iter().cloned().map(|u| u.into()).collect() }
+
+    #[getter]
+    pub fn get_on_update_end(&self) -> Vec<PlrId> { self.inner.on_update_end.to_vec() }
+
+    pub fn len(&self) -> usize { self.inner.updates.len() }
+
+    pub fn is_empty(&self) -> bool { self.inner.updates.is_empty() }
+
+    pub fn had_updates(&self) -> bool { self.inner.had_updates() }
+}
+
+impl From<RunUpdates> for PyRunUpdates {
+    fn from(value: RunUpdates) -> Self { Self { inner: value } }
+}
+
+impl From<PyRunUpdates> for RunUpdates {
+    fn from(value: PyRunUpdates) -> Self { value.inner }
+}
+
+/// 独立持有单条消息事件的 Python 对象，不借用 runner 或所属 RunUpdates。
+///
+/// message 是占位符模板，msg 为展开文本；参数和目标可能缺失，读取时应分别检查
+/// Option 与目标列表，而不是把零值直接解释为有效玩家。
+#[pyclass]
+#[pyo3(name = "RunUpdate")]
+pub struct PyRunUpdate {
+    pub inner: RunUpdate,
+}
+
+impl From<RunUpdate> for PyRunUpdate {
+    fn from(value: RunUpdate) -> Self { Self { inner: value } }
+}
+
+impl From<PyRunUpdate> for RunUpdate {
+    fn from(value: PyRunUpdate) -> Self { value.inner }
+}
+
+#[pymethods]
+impl PyRunUpdate {
+    #[getter]
+    pub fn get_score(&self) -> u32 { self.inner.score }
+
+    #[getter]
+    pub fn get_param(&self) -> Option<u32> { self.inner.param }
+
+    #[getter]
+    pub fn get_delay0(&self) -> i32 { self.inner.delay0 }
+
+    #[getter]
+    pub fn get_delay1(&self) -> i32 { self.inner.delay1 }
+
+    #[getter]
+    pub fn get_message(&self) -> String { self.inner.message.to_string() }
+
+    #[getter]
+    pub fn get_caster_id(&self) -> PlrId { self.inner.caster }
+
+    #[getter]
+    pub fn get_target_id(&self) -> PlrId { self.inner.target }
+
+    #[getter]
+    pub fn get_targets(&self) -> smallvec::SmallVec<[PlrId; 2]> { self.inner.targets.clone() }
+
+    pub fn target_is_empty(&self) -> bool { self.inner.targets.is_empty() }
+
+    pub fn get_update_type(&self) -> String { format!("{:?}", self.inner.update_type) }
+
+    pub fn is_win(&self) -> bool { self.inner.update_type == UpdateType::Win }
+
+    pub fn is_none(&self) -> bool { self.inner.update_type == UpdateType::None }
+
+    pub fn is_next_line(&self) -> bool { self.inner.update_type == UpdateType::NextLine }
+
+    pub fn msg(&self) -> String { self.inner.msg() }
+
+    #[pyo3(signature = (rendered=true))]
+    pub fn to_dict(&self, py: Python<'_>, rendered: bool) -> PyResult<Py<PyAny>> {
+        let names = std::collections::HashMap::new();
+        let mut event = replay::update_to_dto(&self.inner, &names);
+        if !rendered {
+            event.message_rendered.clear();
+        }
+        Ok(replay::event_to_pydict(py, &event)?.into_any().unbind())
+    }
+}

@@ -1,0 +1,57 @@
+# 性能文档与数据
+
+[返回文档中心](../README.md)
+
+报告按采样时的版本、提交和机器环境解读，不将不同口径直接视为当前性能。旧执行器与临时 harness 的命令可能已不可用；当前发布约束见 [性能准则](guides/performance.md)。
+
+## 方法与追踪
+
+- [性能优化与验证准则](guides/performance.md)：构建口径、行为回归、同机 A/B、PGO 与采样。
+- [性能追踪与历史比较](benchmark-history.md)：含当前 `perf_runtime` 复测入口。
+- [AMD uProf 采样指南](guides/amd-uprof.md)。
+- [fixed30 固定输入与历史工具口径](guides/fixed30-benchmark.md)。
+- [OpenBox pair 并行基准（`openbox_pair_probe`）](guides/openbox-pair-probe.md)：
+  headless 复测 OpenBox `pair` 后端的入口、参数、输出约定与同机 A/B 流程。
+
+## 调查报告
+
+- [Openbox 实时通路基线（2026-09-29）](reports/openbox-live-2026-09-29.md)：LiveFeed、首条结果延迟与实时输出。
+- [Openbox 全面检查报告（2026-09-29）](reports/openbox-review-2026-09-29.md)：缓存、文件排序、胜率窗口化与 GUI 通路。
+
+- [OpenBox pair 并行修复复测（2026-09-15）](reports/openbox-pair-parallelism-2026-09-15.md)：
+  fixed30 / CQP / CQD / pair 的同机交替 A/B，含仪表伪影排查与原始样本。
+- [winprob 数据集生成规模基线](reports/winprob-dataset-scale-baseline.md)：10k/100k 局生成的吞吐、存储、内存与校验开销，含 Parquet 行组缺陷的修复前后对比。
+- [胜率数据集 HP-only 基线（100k 局）](reports/winprob-hp-baseline.md)：只用队伍血量比例的无参数基线，含九维容量溢出与 99 字段标量校准结果，作为后续模型的对照下界。
+- [Web Streaming 基线](reports/web-streaming-baseline.md)。
+- [Python BattleSession DTO 转换基线](reports/python-battle-session-baseline.md)。
+- [RC4 热点与优化调查（2026-09-05）](reports/rc4-profile-2026-09-05.md)。
+- [0.5.3 优化机会](reports/optimization-opportunities-0.5.3.md)。
+- [目标选择优化](reports/target-selection-optimization.md)。
+- [UB 与 no_debug 修复性能记录](reports/ub-fix-no-debug.md)。
+
+## Runtime 基准与快照
+
+- [0.5.0 发版基准 · 749fcd1](reports/runtime-0.5.0-749fcd1-release-benchmark.md)。
+- [0.4.3 发版基准 · 9d3a3b9](reports/runtime-0.4.3-9d3a3b9-release-benchmark.md)。
+- [0.4.2 分配器快照 · 1ed1258](reports/runtime-0.4.2-1ed1258-allocator-snapshot.md)。
+- [0.4.2 完整快照 · d813e5f](reports/runtime-0.4.2-d813e5f-snapshot.md)。
+- [Node / Bun / legacy / Runtime 四方比较（2026-07-15）](reports/runtime-four-way-2026-07-15.md)。
+- [0.4.0 基线](reports/runtime-0.4.0-baseline.md)。
+- [CQP / CQD Runtime 基线](reports/cqp-runtime-baseline.md)。
+
+## 固定输入与原始结果
+
+下列文件保留原命名和路径，供现有脚本及历史复现使用。`reports/` 中的手写报告通过相对链接关联原始数据，不要求与 JSON 同名。
+
+| 路径 | 内容 |
+| --- | --- |
+| [fixed_cases_30/](fixed_cases_30/) | 30 个固定输入，文件顺序与内容保持不变 |
+| [fixed_cases_30_results/](fixed_cases_30_results/) | 工具生成的 [初始](fixed_cases_30_results/perf_cases.md)、[0.3.8](fixed_cases_30_results/perf_cases_0.3.8.md)、[0.3.10](fixed_cases_30_results/perf_cases_0.3.10.md) 报告与同名 JSON |
+| [score/](score/)、[cqp/](cqp/)、[win_rate/](win_rate/)、[pgo_training/](pgo_training/) | score、CQP、胜率与 PGO 输入 |
+| `runtime_*.json` | 对应 Runtime 报告的原始结果；从报告内链接进入 |
+| [openbox_pair_parallelism_9b07a04e_ab_samples.json](openbox_pair_parallelism_9b07a04e_ab_samples.json) | OpenBox pair 并行修复复测的逐轮样本与输入哈希 |
+| [rc4_20260905_profile.json](rc4_20260905_profile.json) | RC4 调查数据 |
+| [python_battle_session_samples.json](python_battle_session_samples.json) | Python BattleSession DTO 转换基线的逐次样本 |
+| [web_streaming_result.png](web_streaming_result.png) | Web Streaming 页面截图 |
+
+胜率数据集的设计与读取契约见 [设计索引](../design/README.md) 和 [`tswn_pwp` README](../../crates/tswn_pwp/README.md)；其中 encoder 容量测量直接为 [FeatureEncoder 规格](../design/feature-encoder-spec.md) 提供依据。

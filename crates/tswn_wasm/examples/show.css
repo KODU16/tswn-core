@@ -1,0 +1,69 @@
+/* 按原始层叠顺序组织主题、角色、正文与面板；保持分发入口不变。 */
+@import url("./show-base.css");
+@import url("./show-players.css");
+@import url("./show-replay.css");
+@import url("./show-panels.css");
+
+.version-marker {
+    position: absolute;
+    top: 10px;
+    left: 12px;
+    z-index: 4;
+    display: inline-flex;
+    gap: 10px;
+    padding: 4px 10px;
+    background: var(--surface-soft);
+    border: 1px solid var(--border);
+}
+
+@media (max-width: 900px) {
+    .hlist {
+        position: relative;
+        width: 100%;
+        max-height: 42vh;
+        border-right: none;
+        border-bottom: 1px solid var(--sky-1);
+    }
+
+    .hbody {
+        position: relative;
+        inset: auto;
+        width: 100%;
+        min-height: 58vh;
+    }
+
+    .battle-stage {
+        overflow: auto;
+    }
+
+    .right-controls {
+        right: 12px;
+        bottom: 12px;
+    }
+}
+
+@media (max-width: 640px) {
+    .controlbar {
+        max-width: calc(100vw - 24px);
+        flex-wrap: wrap;
+    }
+}
+
+/* ==========================================================================
+   玩家联动高亮
+   ========================================================================== */
+
+body.highlight-active [data-player-id].hl-active {
+    box-shadow: 0 0 0 1.5px #ff6a00;
+    border-radius: 3px;
+    background: rgba(255, 106, 0, 0.08);
+}
+
+body.highlight-active [data-player-id].hl-active .actor-name,
+body.highlight-active [data-player-id].hl-active .summary-actor-name {
+    color: var(--damage);
+}
+
+body.highlight-active [data-player-id].hl-active.player-row .name {
+    color: var(--damage);
+}

@@ -1,0 +1,292 @@
+# 更新日志
+
+## [Unreleased] - 0.5.5
+
+### 依赖更新
+
+- `pyo3` 升级到 `0.29`；Python API、类型存根与返回结构保持不变。
+
+### 构建
+
+- 新增 `no_debug` / `mimalloc_alloc` 转发 feature；`build_dist.py` 默认
+  `--release --features "no_debug,mimalloc_alloc"`，统一线上编译口径。
+  `Cargo.toml` 的 `tswn_core` 依赖仍固定启用这两个 feature。
+
+### 验证
+
+- `cargo check -p tswn_py --all-targets` 通过（本机以临时关闭 mimalloc 的配置绕过
+  `libmimalloc-sys` 的 `D8050` 环境故障）。
+
+## [0.5.4] - 2026-09-30
+
+### 变更
+
+- 跟进 `tswn_core 0.7.0`，同步核心调度与实现更新；Python API、类型存根及返回结构保持不变。
+
+### 依赖更新
+
+- 更新 `smallvec` 至现有兼容范围内的最新版本。
+
+## [0.5.3] - 2026-09-08
+
+### 新增
+
+- 新增 `batch_rate_factored()` 与 `pair_rate_factored()`，支持按与靶子组等长的正数权重数组进行加权计算。
+- 新增 `BattleSession` PyClass、迭代器和完整 TypedDict；`battle_replay()` 精确返回 `BattleReplay`，异常暴露统一错误码。
+- `BattleSession.is_failed()` 可查询粘性 Runtime failure；失败时没有 result/stop_reason，`is_done` 仍为 false。
+
+### 修复
+
+- 同步 core 的批量判胜修复：队伍被清空后重新复活时，`batch_rate()`、`pair_rate()` 及带权变体不再误判胜者。
+- 同步公共 replay view 的苏生 HP 与亡灵转化文本修复；`battle_replay()` 和 BattleSession 迭代结果保持一致。
+
+## [0.5.2] - 2026-08-31
+
+### 新增
+
+- 新增 `battle_replay()` 推荐高层入口与带稳定 `.code` 的 `InvalidInputError` / `TswnRuntimeError`；PreparedRunner 增加只读 `eval_rq`。
+
+### 修复
+
+- 同步 core 的 Merge 状态刷新修复；`namer_pf()` / `score()` 在吞噬仅
+  合并技能的战斗中不再沿用旧的 Haste 生效倍率，Python API 形状不变。
+- 同步铁壁打破时立即注销状态，以及尾部空 `@` 按无队名解析的兼容修复。
+- 同步 `@team:metadata` 按 Bun 解析为无队名的修复，并修复目标与 score profile
+  同 clan 时的 core panic；Python API 形状不变。
+- 同步嵌套自定义幻影的延迟蓝图修复；`namer_pf()` / `score()` 遇到带 `Clone`、
+  `Shadow` 的幻影不再触发 core panic，Python API 形状不变。
+
+## [0.5.1] - 2026-07-30
+
+### 修复
+
+- 同步 core 0.5.1 的 `namer_pf()` / `score()` 行为修复，覆盖 clone、状态刷新、
+  Protect 重定向和召唤物延迟死亡边界；Python API 形状不变。
+
+## [0.5.0] - 2026-07-18
+
+### ⚠️ Breaking Changes
+
+- `Runner` / `PreparedRunner` 会话切换到主 Runtime；删除 `Runner.round_tick*`、`Storage`、`WorldState`、`Player` 及 parity helper，保留 `main_round`、完成态、RC4、胜者、snapshot 与 replay 接口。
+- 未显式提供 guard 的完成与 replay 路径统一使用 20,000 主回合上限；replay clip 继续只从 `parts[]` 暴露渲染语义。
+- 迁移时使用 `snapshot_players()` 代替旧玩家/世界对象 getter，使用 `winner_team_index()` / `winner_team_indices()` 查询胜者，逐回合推进统一调用 `main_round()`。
+
+### 修复
+
+- 类型存根补齐 `ScoreResult.errors` 与 `default_custom_runtime_normalized_run()`，并同步扩展模块及包顶层的重导出和 `__all__`。
+
+## [0.4.0] - 2026-07-14
+
+### ⚠️ Breaking Changes
+
+- `Runner.build_replay()` 的 clip dict 与类型存根删除多项顶层渲染字段，调用方必须改读 `parts[]`。
+- 无 runtime 参数的评分、胜率、批量与 `namer_pf` 顶层 helper 默认改用 Runtime。
+
+### 变更
+
+- 精简 `Runner.build_replay()` 中 `frames[].rows[].clips[]` 的 clip dict 与类型存根：移除 clip 顶层的 `text_template`、`player_id`、`data`、`show_hp`、`hp_before`、`hp_after`、`death_effect` 与 `emoji`，统一从 `parts[]` 读取文本、玩家、数值、血条和死亡特效语义。
+- 生命之轮体力互换句中的两个玩家 part 都强制返回 `show_hp == True`，即使血量没有实际变化。
+- `Runner.build_replay()` 同步补齐机制死亡的 part 级 `death_effect`：附体、自爆、owner 死亡牵连等没有前置伤害句的死亡，会在“被击倒/消失”句显示死亡特效；死亡特效 part 的 `show_hp` 固定为 `False`。
+
+## [0.3.0] - 2026-06-27
+
+### 新增
+
+- 补齐一批与 `tswn-cli` 对齐的 Python 顶层 helper：
+  - 胜率摘要：`win_rate_summary()`、`team_win_rate_summary()`、`group_win_rate_summary()`
+  - 评分与 namer-pf：`score()`、`namer_pf()`
+  - 批量胜率与配队：`batch_rate()`、`pair_rate()`
+  - DIY/OL 导出：`to_diy()`、`to_diy_batch()`
+  - 图标元信息与列表解析：`icon_info()`、`parse_group_lines()`
+- 新增结构化返回类型：
+  - `WinRateResult`
+  - `ScoreResult`
+  - `NamerPfResult`
+  - `BatchRateResult`
+  - `PairRateResult`
+  - `IconInfo`
+- 新增 `scripts/verify_py_cli_api.py`，用于构建本地 `tswn_py` 扩展并验证 Python 接口与 CLI 语义对齐。
+- 新增服务端直播/回放高层接口：
+  - `Runner.winner_team_index()` / `Runner.winner_team_indices()`：直接返回胜利输入队伍索引。
+  - `Runner.snapshot_players()`：返回包含队伍归属、显示顺序、基础信息、属性和运行状态的标准玩家快照。
+  - `RunUpdate.to_dict(rendered=True)`：返回结构化事件 DTO，并可同时给出渲染后的消息文本。
+  - `Runner.build_replay(limit=None)`：生成包含初始状态、事件列表、tick 前后真实状态、播放延迟和胜者信息的 replay timeline。
+  - `compute_show_timeline(updates, player_count, scale=True)`：按 show.html 语义为已有事件计算播放延迟。
+- 新增 replay 相关类型存根，覆盖 `PlayerSnapshot`、`EventDto`、`TimedEvent`、`ReplayEvent` 与 `BattleReplay`。
+- `Runner.build_replay(limit=None)` 新增 `frames[].rows[].clips[]` replay view 结构，与 WASM 共用 `tswn_core::replay_view` 的分行、分帧、文本片段、血条和死亡特效信息，前端可直接按结构渲染。
+- 新增 replay view 类型存根：`ReplayFrame`、`ReplayRow`、`ReplayClip` 与 `ReplayTextPart`。
+- `PlayerSnapshot` 新增 `display_index`，用于区分同一名字下的运行期分身展示序号；本体为 `0`，后续分身为 `1`、`2`……
+
+### 变更
+
+- `to_diy(old=True, minions=True)` 现在与 CLI 的 `--old` / `--minions` 互斥约束一致，会抛出 `ValueError`。
+- 修正 `Player` 类型存根，将不存在的 `mp` 属性改为实际暴露的 `magic_point`。
+- 顶层高层 helper 的实现改为复用 `tswn_core::cli_api` 共享逻辑层，继续保持现有 Python API 与返回类型不变。
+- replay 事件快照使用每个引擎 tick 前后的真实状态（`state_granularity == "tick"`），服务端不再需要根据事件文本自行模拟逐条状态变化。
+- replay 文本渲染与回放视图构建下沉到 `tswn_core::replay_view`，Python 包装层只负责转换为 dict，避免与 WASM 重复维护分行、延迟和血条推演逻辑。
+- replay view 的玩家文本对分身使用底层 `display_index`，并同步句子级 delay、血条展示和死亡特效规则。
+
+## [0.2.1] - 2026-05-19
+
+### 新增
+
+- 补齐 PreparedRunner 胜率接口：
+  - 顶层新增 `prepared_win_rate(prepared, n, eval_rq=None, thread=0)`
+  - `PreparedRunner` 新增实例方法 `win_rate(n, eval_rq=None, thread=0)`
+- 更新类型存根与 README，使 prepared 路径的公开 API 与 Rust 实现对齐。
+
+## [0.2.0] - 2026-05-07
+
+### ⚠️ Breaking Changes
+
+- **`Player.mp` 属性重命名为 `magic_point`**：Python 绑定中的 `get_mp`（暴露为 `.mp` 属性）已重命名为 `get_magic_point`（暴露为 `.magic_point` 属性）。
+
+### 变更
+
+- `PyPlayer::get_mp` → `PyPlayer::get_magic_point`，内部调用从 `self.inner.mp()` 改为 `self.inner.magic_point()`。
+
+## [0.1.11] - 2026-04-07
+
+### 新增
+
+- Python 高层 `win_rate(raw, n, eval_rq=None, thread=0)` / `group_win_rate(target, against, n, eval_rq=None, thread=0)` 新增可选 `thread` 参数，语义与 CLI / C-API 对齐：
+  - `0`：自动线程数
+  - `1`：单线程
+  - `n`：指定线程数
+- Python prepared 胜率统计内部新增多线程执行路径，线程分发策略与 CLI / C-API 保持一致。
+
+### 变更
+
+- 更新顶层类型存根以对齐新的 `thread` 可选参数签名。
+
+## [0.1.10] - 2026-04-07
+
+### 修复
+
+- 修复 Python 高层 `win_rate(...)` / `group_win_rate(...)` 在 prepared 路径下的 JS profile seed 调度偏移：首局继续不带 seed，后续局数改为从 `seed:33554431@! + i` 递增，避免与 CLI / C-API 的 prepared 胜率语义错开一位。
+
+## [0.1.9] - 2026-04-06
+
+### 新增
+
+- `Runner` 新增：
+  - `player_input_group_index(player_id)`：根据玩家 `id` 直接查询其对应的原始输入 `group_index`，便于调用方按输入队伍归属判断胜者属于哪一组，而不必再自行扫描 `input_groups` roster 构造映射。
+
+### 变更
+
+- 更新类型存根以对齐新的 `Runner.player_input_group_index()` 接口。
+
+## [0.1.8] - 2026-04-05
+
+### 新增
+
+- `Runner` 新增：
+  - `new_from_groups_with_seed_and_eval_rq(groups, seed, eval_rq)`
+  - `prepare_groups(groups)`
+  - `prepare_groups_with_eval_rq(groups, eval_rq)`
+  - `new_from_prepared_with_seed(prepared, seed)`
+- 新增 `PreparedRunner` 类型，用于复用预处理后的分组输入。
+- `Runner` 新增 `input_groups` 属性，暴露原始输入顺序对应的队伍 roster。
+- `Storage` 新增 `eval_rq` 属性。
+- 顶层新增高层 helper：
+  - `win_rate(raw, n, eval_rq=None)`
+  - `group_win_rate(target, against, n, eval_rq=None)`
+- 顶层新增常量：
+  - `DEFAULT_EVAL_RQ`
+  - `WIN_RATE_EVAL_RQ`
+- 顶层新增 `name_to_icon_rgba(name)`，用于获取 16x16 RGBA 原始像素。
+- 新增 Python examples：
+  - `examples/runner_prepared.py`
+  - `examples/runner_eval_rq.py`
+  - `examples/win_rate.py`
+
+### 变更
+
+- 将 `tswn_py.pyi` 拆分为多个较短的 stub 文件，减少单文件维护成本。
+- 更新类型存根以对齐 `tswn_core` 新公开的 runner / storage API。
+
+## [0.1.7] - 2026-03-22
+
+- 去掉了某些文字
+
+## [0.1.6] - 2026-03-16
+
+### 新增
+
+- `Runner` 新增：
+  - `new_from_groups_with_seed(groups, seed)`：对齐 core 新增构造接口
+  - `round_tick_new_update_no_capture()`：返回 no-capture 更新容器
+- `RunUpdates` 新增：
+  - `new_no_capture()`：创建不采集详细帧的容器
+  - `reset()`：对齐 core 的复用/重置语义
+  - `capture_updates` 属性
+  - `had_updates()` 活动标记查询
+
+### 变更
+
+- `RunUpdates.clear()` 内部行为对齐 core `reset()`，避免仅清列表导致活动标记未复位
+- 更新 `tswn_py.pyi` 类型存根，补齐上述 API
+
+## [0.1.5] - 2026-03-15
+
+### 新增
+
+- 扩展 `Runner` Python API，新增：
+  - `split_namerena_into_groups`
+  - `main_round`
+  - `alives_flat` / `alives`
+  - `all_plrs` / `all_plr_len`
+- 扩展 `WorldState` Python API，新增：
+  - `players`、`winner`、`all_plrs`、`all_plr_len`
+  - `roster_count`、`team_index_of`、`team_roster`、`team_alive`
+  - `contains_alive`、`winner_roster`
+- 扩展 `Storage` Python API，新增分组/存活组/pending spawn 查询与状态接口：
+  - `get_player_or_pending_by_id`、`get_pending_spawn_player_by_id`
+  - `get_group`、`group_containing`、`group_index_of`
+  - `alive_group_containing`、`alive_group_at_team_of`
+  - `all_alive_ids`、`all_player_ids`
+  - `pending_spawn_count`、`pending_spawn_count_for_owner`
+  - `pending_spawn_ids_for_owner`、`pending_spawn_ids_for_group`
+  - `alive_group_count`、`needs_sync`
+- 扩展 `Player` Python API，新增更多运行时与状态只读字段（如 HP/MP、攻防速敏魔抗智、`player_type`、`weapon_name` 等）。
+- 扩展 `RC4` Python API，新增构造与更多核心方法暴露（`update`、`round`、`next_u8`、`next_i32`、`xor/encrypt/decrypt`、`cXX`、`rXX` 系列等）。
+- 扩展 `RunUpdates` / `RunUpdate` Python API：
+  - `RunUpdates.on_update_end`、`RunUpdates.len()`、`RunUpdates.is_empty()`
+  - `RunUpdate.is_win()`、`RunUpdate.is_none()`、`RunUpdate.is_next_line()`
+
+### 变更
+
+- 更新 `tswn_py.pyi` 类型存根，与新增暴露 API 保持一致。
+
+## [0.1.4] - 2026-03-15
+
+### 新增
+
+- 重构 Python 绑定代码，将包装类分离到独立模块
+  - 新增 `player.rs` 和 `rc4.rs`，分别实现 `Player` 和 `RC4` 的 Python 包装
+  - 重命名 `wrapper.rs` 为 `wrapper/mod.rs`，整理模块结构
+- 完善类型存根文件
+  - 多次更新 `__init__.pyi` 和 `tswn_py.pyi`，确保类型定义与 Rust 实现一致
+  - 修正了 `Storage` 和 `RC4` 的类型注解
+- 添加版本管理模块 `_version.py`，统一管理包版本
+- 改进错误处理，完善 `error.rs` 中的异常定义
+- 更新项目配置（`Cargo.toml`、`MANIFEST.in`、`pyproject.toml`）以支持正确打包
+- 添加 `CHANGELOG.md` 文件，开始记录版本历史
+
+## [0.1.3] - 2026-03-15
+
+### 新增
+
+- 新增包装类
+  - `RC4`
+    - 核心算法实现
+  - `Storage`
+    - 玩家数据存储和管理
+  - `WorldState`
+    - 世界状态管理和同步
+
+## [0.1.2] - 2026-03-14
+
+### 已修复
+
+- 修复了RunUpdates -> RunUpdate滚木的问题

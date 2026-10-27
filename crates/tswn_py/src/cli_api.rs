@@ -1,0 +1,890 @@
+//! 与高层 `tswn-cli` 命令对齐、面向 Python 的同步辅助函数。
+//!
+//! 函数注册在 Python 扩展顶层；返回对象持有自己的数据，不借用输入字符串或 core
+//! 运行时。胜率单位为百分比，耗时单位为纳秒；线程参数 0/1/n 表示自动/单线程/
+//! 指定线程。业务错误转换为携带稳定 code 的异常，Python 对象构造错误直接传播；
+//! 不在本层捕获 Rust panic 或回滚已经完成的计算。
+
+use pyo3::{
+    Py, PyAny, PyResult, Python,
+    exceptions::{PyRuntimeError, PyValueError},
+    pyclass, pyfunction, pymethods,
+    types::{PyDict, PyDictMethods, PyList},
+};
+use tswn_core::cli_api::{
+    self as core_cli_api, CliApiError, JsonRuntimeNormalizedOutcome, JsonRuntimeNormalizedRun, JsonRuntimeUpdateFrame,
+};
+
+use crate::wrapper;
+
+/// 面向用户辅助 API 的稳定错误码：输入无效。
+#[pyclass(extends=PyValueError)]
+#[pyo3(name = "InvalidInputError")]
+pub struct PyInvalidInputError;
+
+#[pymethods]
+impl PyInvalidInputError {
+    #[new]
+    fn new(_message: &pyo3::Bound<'_, PyAny>) -> Self { Self }
+
+    #[getter]
+    fn code(&self) -> &'static str { core_cli_api::CliApiErrorCode::InvalidInput.as_str() }
+}
+
+/// 面向用户辅助 API 的稳定错误码：运行时错误。
+#[pyclass(extends=PyRuntimeError)]
+#[pyo3(name = "TswnRuntimeError")]
+pub struct PyCliRuntimeError;
+
+#[pymethods]
+impl PyCliRuntimeError {
+    #[new]
+    fn new(_message: &pyo3::Bound<'_, PyAny>) -> Self { Self }
+
+    #[getter]
+    fn code(&self) -> &'static str { core_cli_api::CliApiErrorCode::RuntimeFailed.as_str() }
+}
+
+#[pyclass]
+#[pyo3(name = "WinRateResult")]
+#[derive(Clone)]
+/// 一组试验的独立结果：wins/total 为计数，win_rate 为百分比，耗时为纳秒。
+pub struct PyWinRateResult {
+    wins: usize,
+    total: usize,
+    win_rate: f64,
+    init_nanos: u128,
+    fight_nanos: u128,
+}
+
+impl From<core_cli_api::WinRateResult> for PyWinRateResult {
+    fn from(value: core_cli_api::WinRateResult) -> Self {
+        Self {
+            wins: value.wins,
+            total: value.total,
+            win_rate: value.win_rate,
+            init_nanos: value.init_nanos,
+            fight_nanos: value.fight_nanos,
+        }
+    }
+}
+
+#[pymethods]
+impl PyWinRateResult {
+    #[getter]
+    fn wins(&self) -> usize { self.wins }
+
+    #[getter]
+    fn total(&self) -> usize { self.total }
+
+    #[getter]
+    fn win_rate(&self) -> f64 { self.win_rate }
+
+    #[getter]
+    fn init_nanos(&self) -> u128 { self.init_nanos }
+
+    #[getter]
+    fn fight_nanos(&self) -> u128 { self.fight_nanos }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "WinRateResult(wins={}, total={}, win_rate={:.6})",
+            self.wins, self.total, self.win_rate
+        )
+    }
+}
+
+#[pyclass]
+#[pyo3(name = "ScoreResult")]
+#[derive(Clone)]
+/// 单项评分结果；errors 汇总失败或耗尽保护预算的试验，不等同于输入解析错误。
+pub struct PyScoreResult {
+    score: f64,
+    wins: usize,
+    total: usize,
+    errors: usize,
+    init_nanos: u128,
+    fight_nanos: u128,
+}
+
+impl From<core_cli_api::ScoreResult> for PyScoreResult {
+    fn from(value: core_cli_api::ScoreResult) -> Self {
+        Self {
+            score: value.score,
+            wins: value.wins,
+            total: value.total,
+            errors: value.errors,
+            init_nanos: value.init_nanos,
+            fight_nanos: value.fight_nanos,
+        }
+    }
+}
+
+#[pymethods]
+impl PyScoreResult {
+    #[getter]
+    fn score(&self) -> f64 { self.score }
+
+    #[getter]
+    fn wins(&self) -> usize { self.wins }
+
+    #[getter]
+    fn total(&self) -> usize { self.total }
+
+    #[getter]
+    fn errors(&self) -> usize { self.errors }
+
+    #[getter]
+    fn init_nanos(&self) -> u128 { self.init_nanos }
+
+    #[getter]
+    fn fight_nanos(&self) -> u128 { self.fight_nanos }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ScoreResult(score={:.6}, wins={}, total={}, errors={})",
+            self.score, self.wins, self.total, self.errors
+        )
+    }
+}
+
+#[pyclass]
+#[pyo3(name = "NamerPfResult")]
+#[derive(Clone)]
+/// 单个名字组的多模式评分；modes 与 scores 同序，total_score 为各项总和。
+pub struct PyNamerPfResult {
+    group: Vec<String>,
+    modes: Vec<String>,
+    scores: Vec<f64>,
+    total_score: f64,
+}
+
+impl From<core_cli_api::NamerPfResult> for PyNamerPfResult {
+    fn from(value: core_cli_api::NamerPfResult) -> Self {
+        Self {
+            group: value.group,
+            modes: value.modes,
+            scores: value.scores,
+            total_score: value.total_score,
+        }
+    }
+}
+
+#[pymethods]
+impl PyNamerPfResult {
+    #[getter]
+    fn group(&self) -> Vec<String> { self.group.clone() }
+
+    #[getter]
+    fn modes(&self) -> Vec<String> { self.modes.clone() }
+
+    #[getter]
+    fn scores(&self) -> Vec<f64> { self.scores.clone() }
+
+    #[getter]
+    fn total_score(&self) -> f64 { self.total_score }
+
+    fn as_line(&self, precision: usize) -> String {
+        self.scores
+            .iter()
+            .copied()
+            .chain(std::iter::once(self.total_score))
+            .map(|score| format_rate(score, precision))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NamerPfResult(group={:?}, modes={:?}, total_score={:.6})",
+            self.group, self.modes, self.total_score
+        )
+    }
+}
+
+#[pyclass]
+#[pyo3(name = "BatchRateResult")]
+#[derive(Clone)]
+/// 候选组对靶子的汇总；平均胜率与累计 wins/total 胜率分别保留，不应混用。
+pub struct PyBatchRateResult {
+    label: String,
+    avg_win_rate: f64,
+    aggregate_win_rate: f64,
+    wins: usize,
+    total: usize,
+    valid_matchups: usize,
+    skipped_matchups: usize,
+    init_nanos: u128,
+    fight_nanos: u128,
+}
+
+impl From<core_cli_api::BatchRateResult> for PyBatchRateResult {
+    fn from(value: core_cli_api::BatchRateResult) -> Self {
+        Self {
+            label: value.label,
+            avg_win_rate: value.avg_win_rate,
+            aggregate_win_rate: value.aggregate_win_rate,
+            wins: value.wins,
+            total: value.total,
+            valid_matchups: value.valid_matchups,
+            skipped_matchups: value.skipped_matchups,
+            init_nanos: value.init_nanos,
+            fight_nanos: value.fight_nanos,
+        }
+    }
+}
+
+#[pymethods]
+impl PyBatchRateResult {
+    #[getter]
+    fn label(&self) -> String { self.label.clone() }
+
+    #[getter]
+    fn avg_win_rate(&self) -> f64 { self.avg_win_rate }
+
+    #[getter]
+    fn aggregate_win_rate(&self) -> f64 { self.aggregate_win_rate }
+
+    #[getter]
+    fn wins(&self) -> usize { self.wins }
+
+    #[getter]
+    fn total(&self) -> usize { self.total }
+
+    #[getter]
+    fn valid_matchups(&self) -> usize { self.valid_matchups }
+
+    #[getter]
+    fn skipped_matchups(&self) -> usize { self.skipped_matchups }
+
+    #[getter]
+    fn init_nanos(&self) -> u128 { self.init_nanos }
+
+    #[getter]
+    fn fight_nanos(&self) -> u128 { self.fight_nanos }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BatchRateResult(label={:?}, avg_win_rate={:.6}, valid_matchups={}, skipped_matchups={})",
+            self.label, self.avg_win_rate, self.valid_matchups, self.skipped_matchups
+        )
+    }
+}
+
+#[pyclass]
+#[pyo3(name = "PairRateResult")]
+#[derive(Clone)]
+/// 单个玩家的搭档评分与头部组合副本；读取或修改取出的列表不影响其他结果。
+pub struct PyPairRateResult {
+    label: String,
+    final_score: f64,
+    head: usize,
+    selected: usize,
+    top_pairs: Vec<(String, f64)>,
+    aggregate_win_rate: f64,
+    wins: usize,
+    total: usize,
+    valid_matchups: usize,
+    skipped_matchups: usize,
+    init_nanos: u128,
+    fight_nanos: u128,
+}
+
+impl From<core_cli_api::PairRateResult> for PyPairRateResult {
+    fn from(value: core_cli_api::PairRateResult) -> Self {
+        Self {
+            label: value.label,
+            final_score: value.final_score,
+            head: value.head,
+            selected: value.selected,
+            top_pairs: value.top_pairs.into_iter().map(|pair| (pair.name, pair.rate)).collect(),
+            aggregate_win_rate: value.aggregate_win_rate,
+            wins: value.wins,
+            total: value.total,
+            valid_matchups: value.valid_matchups,
+            skipped_matchups: value.skipped_matchups,
+            init_nanos: value.init_nanos,
+            fight_nanos: value.fight_nanos,
+        }
+    }
+}
+
+#[pymethods]
+impl PyPairRateResult {
+    #[getter]
+    fn label(&self) -> String { self.label.clone() }
+
+    #[getter]
+    fn final_score(&self) -> f64 { self.final_score }
+
+    #[getter]
+    fn head(&self) -> usize { self.head }
+
+    #[getter]
+    fn selected(&self) -> usize { self.selected }
+
+    #[getter]
+    fn top_pairs(&self) -> Vec<(String, f64)> { self.top_pairs.clone() }
+
+    #[getter]
+    fn aggregate_win_rate(&self) -> f64 { self.aggregate_win_rate }
+
+    #[getter]
+    fn wins(&self) -> usize { self.wins }
+
+    #[getter]
+    fn total(&self) -> usize { self.total }
+
+    #[getter]
+    fn valid_matchups(&self) -> usize { self.valid_matchups }
+
+    #[getter]
+    fn skipped_matchups(&self) -> usize { self.skipped_matchups }
+
+    #[getter]
+    fn init_nanos(&self) -> u128 { self.init_nanos }
+
+    #[getter]
+    fn fight_nanos(&self) -> u128 { self.fight_nanos }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PairRateResult(label={:?}, final_score={:.6}, selected={}, head={})",
+            self.label, self.final_score, self.selected, self.head
+        )
+    }
+}
+
+#[pyclass]
+#[pyo3(name = "IconInfo")]
+#[derive(Clone)]
+/// 名字图标的结构描述；包含颜色与形状索引，不持有 PNG 像素缓冲。
+pub struct PyIconInfo {
+    border_style: usize,
+    shapes: Vec<usize>,
+    bg_color_idx: usize,
+    bg_color: (u8, u8, u8),
+    fg_color_indices: Vec<usize>,
+    fg_colors: Vec<(u8, u8, u8)>,
+    colors_consumed: usize,
+}
+
+impl From<core_cli_api::IconInfo> for PyIconInfo {
+    fn from(value: core_cli_api::IconInfo) -> Self {
+        Self {
+            border_style: value.border_style,
+            shapes: value.shapes,
+            bg_color_idx: value.bg_color_idx,
+            bg_color: (value.bg_color[0], value.bg_color[1], value.bg_color[2]),
+            fg_color_indices: value.fg_color_indices,
+            fg_colors: value.fg_colors.into_iter().map(|color| (color[0], color[1], color[2])).collect(),
+            colors_consumed: value.colors_consumed,
+        }
+    }
+}
+
+#[pymethods]
+impl PyIconInfo {
+    #[getter]
+    fn border_style(&self) -> usize { self.border_style }
+
+    #[getter]
+    fn shapes(&self) -> Vec<usize> { self.shapes.clone() }
+
+    #[getter]
+    fn bg_color_idx(&self) -> usize { self.bg_color_idx }
+
+    #[getter]
+    fn bg_color(&self) -> (u8, u8, u8) { self.bg_color }
+
+    #[getter]
+    fn fg_color_indices(&self) -> Vec<usize> { self.fg_color_indices.clone() }
+
+    #[getter]
+    fn fg_colors(&self) -> Vec<(u8, u8, u8)> { self.fg_colors.clone() }
+
+    #[getter]
+    fn colors_consumed(&self) -> usize { self.colors_consumed }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "IconInfo(border_style={}, shapes={:?}, bg_color={:?}, fg_colors={:?})",
+            self.border_style, self.shapes, self.bg_color, self.fg_colors
+        )
+    }
+}
+
+pub(crate) fn map_cli_error(err: CliApiError) -> pyo3::PyErr {
+    match err {
+        CliApiError::InvalidInput(message) => pyo3::PyErr::new::<PyInvalidInputError, _>(message),
+        CliApiError::RunnerInit(err) => wrapper::error::PyRunnerError::new(err).into(),
+        CliApiError::Runtime(message) => pyo3::PyErr::new::<PyCliRuntimeError, _>(message),
+        CliApiError::InvalidArgument(message) => pyo3::PyErr::new::<PyInvalidArgumentError, _>(message),
+        CliApiError::UnsupportedOption(message) => pyo3::PyErr::new::<PyUnsupportedOptionError, _>(message),
+        CliApiError::Internal(message) => pyo3::PyErr::new::<PyInternalError, _>(message),
+    }
+}
+
+fn normalized_run_to_pydict<'py>(py: Python<'py>, run: JsonRuntimeNormalizedRun) -> PyResult<pyo3::Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    let rounds = run
+        .rounds
+        .into_iter()
+        .map(|round| normalized_outcome_to_pydict(py, round))
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item("rounds", PyList::new(py, rounds)?)?;
+    dict.set_item("winner_team", run.winner_team)?;
+    dict.set_item("guard_exhausted", run.guard_exhausted)?;
+    dict.set_item("total_score", run.total_score)?;
+    Ok(dict)
+}
+
+fn normalized_outcome_to_pydict<'py>(
+    py: Python<'py>,
+    outcome: JsonRuntimeNormalizedOutcome,
+) -> PyResult<pyo3::Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("winner_team", outcome.winner_team)?;
+    dict.set_item("round", outcome.round)?;
+    dict.set_item("total_score", outcome.total_score)?;
+    dict.set_item("rng_i", outcome.rng_i)?;
+    dict.set_item("rng_j", outcome.rng_j)?;
+    dict.set_item("entity_ids", outcome.entity_ids)?;
+    dict.set_item("teams", outcome.teams)?;
+    dict.set_item("hp", outcome.hp)?;
+    dict.set_item("magic_point", outcome.magic_point)?;
+    dict.set_item("defense", outcome.defense)?;
+    dict.set_item("resistance", outcome.resistance)?;
+    dict.set_item("alive", outcome.alive)?;
+    dict.set_item("round_order", outcome.round_order)?;
+    dict.set_item("flat_alive", outcome.flat_alive)?;
+    dict.set_item("team_alive", outcome.team_alive)?;
+    dict.set_item("alive_group_count", outcome.alive_group_count)?;
+
+    let actions = outcome
+        .actions
+        .into_iter()
+        .map(|action| {
+            let action_dict = PyDict::new(py);
+            action_dict.set_item("round", action.round)?;
+            action_dict.set_item("actor", action.actor)?;
+            action_dict.set_item("target", action.target)?;
+            action_dict.set_item("amount", action.amount)?;
+            Ok(action_dict)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item("actions", PyList::new(py, actions)?)?;
+
+    let frames = outcome
+        .frames
+        .into_iter()
+        .map(|frame| normalized_update_frame_to_pydict(py, frame))
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item("frames", PyList::new(py, frames)?)?;
+    Ok(dict)
+}
+
+fn normalized_update_frame_to_pydict<'py>(py: Python<'py>, frame: JsonRuntimeUpdateFrame) -> PyResult<pyo3::Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("message", frame.message)?;
+    dict.set_item("caster", frame.caster)?;
+    dict.set_item("target", frame.target)?;
+    dict.set_item("targets", frame.targets)?;
+    dict.set_item("param", frame.param)?;
+    dict.set_item("score", frame.score)?;
+    dict.set_item("delay0", frame.delay0)?;
+    dict.set_item("delay1", frame.delay1)?;
+    dict.set_item("update_type", frame.update_type)?;
+    Ok(dict)
+}
+
+#[pyfunction(signature = (raw, eval_rq=None, include_icons=false, max_rounds=None))]
+/// 同步收集规范回放为 dict/list；max_rounds 是正数回合上限，None 使用 core 默认值。
+///
+/// 返回 initial_states、frames、final_states 与终止原因；截断仍是正常返回，
+/// Runtime 失败抛异常。整场及快照全部保存在内存中，大对局优先使用 BattleSession。
+pub fn battle_replay(
+    py: Python<'_>,
+    raw: String,
+    eval_rq: Option<f64>,
+    include_icons: bool,
+    max_rounds: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let options = crate::battle::options(eval_rq, include_icons, max_rounds);
+    let replay = core_cli_api::battle_replay(&raw, options).map_err(map_cli_error)?;
+    crate::battle::dto_to_python(py, &replay)
+}
+
+#[pyfunction(signature = (raw, n, eval_rq=None, thread=0))]
+/// 解析空行分队的 raw，返回第一组的计数、百分比及耗时；eval_rq=None 使用胜率口径。
+pub fn win_rate_summary(raw: String, n: usize, eval_rq: Option<f64>, thread: u32) -> PyResult<PyWinRateResult> {
+    core_cli_api::win_rate_summary(&raw, n, eval_rq, thread)
+        .map(Into::into)
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (team1, team2, n, eval_rq=None, thread=0))]
+/// 比较两个多行队伍文本，返回与 win_rate_summary 相同形状的独立结果。
+pub fn team_win_rate_summary(
+    team1: String,
+    team2: String,
+    n: usize,
+    eval_rq: Option<f64>,
+    thread: u32,
+) -> PyResult<PyWinRateResult> {
+    core_cli_api::team_win_rate_summary(&team1, &team2, n, eval_rq, thread)
+        .map(Into::into)
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (target, against, n, eval_rq=None, thread=0))]
+/// 按 against 输入顺序返回 `(对手文本, 结果)` 列表；任一失败抛异常，不返回部分列表。
+pub fn group_win_rate_summary(
+    target: String,
+    against: Vec<String>,
+    n: usize,
+    eval_rq: Option<f64>,
+    thread: u32,
+) -> PyResult<Vec<(String, PyWinRateResult)>> {
+    core_cli_api::group_win_rate_summary(&target, &against, n, eval_rq, thread)
+        .map(|results| results.into_iter().map(|entry| (entry.opponent, entry.result.into())).collect())
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (raw, n, mode="normal", eval_rq=None, thread=0))]
+/// 按 mode 执行单项评分，返回分数、胜场/总场、失败统计和纳秒耗时。
+pub fn score(raw: String, n: usize, mode: &str, eval_rq: Option<f64>, thread: u32) -> PyResult<PyScoreResult> {
+    core_cli_api::score(&raw, n, mode, eval_rq, thread).map(Into::into).map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (raw, n, modes=None, keep_rq=false, thread=0))]
+/// 按行解析名字组合，执行 modes 评分；None 使用默认模式，keep_rq 选择普通构建口径。
+pub fn namer_pf(raw: String, n: usize, modes: Option<Vec<String>>, keep_rq: bool, thread: u32) -> PyResult<Vec<PyNamerPfResult>> {
+    core_cli_api::namer_pf(&raw, n, modes, keep_rq, thread)
+        .map(|results| results.into_iter().map(Into::into).collect())
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (target_groups, player_groups, n, player_labels=None, keep_rq=false, thread=0))]
+/// 批量比较 player_groups 与 target_groups；标签省略时自动生成，否则与候选组一一对应。
+pub fn batch_rate(
+    target_groups: Vec<String>,
+    player_groups: Vec<String>,
+    n: usize,
+    player_labels: Option<Vec<String>>,
+    keep_rq: bool,
+    thread: u32,
+) -> PyResult<Vec<PyBatchRateResult>> {
+    core_cli_api::batch_rate(&target_groups, &player_groups, n, player_labels, keep_rq, thread)
+        .map(|results| results.into_iter().map(Into::into).collect())
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (target_groups, target_factors, player_groups, n, player_labels=None, keep_rq=false, thread=0))]
+/// 带靶子权重的批量胜率；target_factors 与目标组等长，每项必须有限且为正。
+pub fn batch_rate_factored(
+    target_groups: Vec<String>,
+    target_factors: Vec<f64>,
+    player_groups: Vec<String>,
+    n: usize,
+    player_labels: Option<Vec<String>>,
+    keep_rq: bool,
+    thread: u32,
+) -> PyResult<Vec<PyBatchRateResult>> {
+    core_cli_api::batch_rate_factored(
+        &target_groups,
+        &target_factors,
+        &player_groups,
+        n,
+        player_labels,
+        keep_rq,
+        thread,
+    )
+    .map(|results| results.into_iter().map(Into::into).collect())
+    .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (target_groups, players, teammates, head, n, keep_rq=false, thread=0))]
+/// 评估 players 与 teammates 的组合；head 控制用于最终汇总的头部搭档数量。
+pub fn pair_rate(
+    target_groups: Vec<String>,
+    players: Vec<String>,
+    teammates: Vec<String>,
+    head: usize,
+    n: usize,
+    keep_rq: bool,
+    thread: u32,
+) -> PyResult<Vec<PyPairRateResult>> {
+    core_cli_api::pair_rate(&target_groups, &players, &teammates, head, n, keep_rq, thread)
+        .map(|results| results.into_iter().map(Into::into).collect())
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (target_groups, target_factors, players, teammates, head, n, keep_rq=false, thread=0))]
+/// 以 target_factors 加权靶子胜率后评估搭档；权重须与靶子等长且有限为正。
+pub fn pair_rate_factored(
+    target_groups: Vec<String>,
+    target_factors: Vec<f64>,
+    players: Vec<String>,
+    teammates: Vec<String>,
+    head: usize,
+    n: usize,
+    keep_rq: bool,
+    thread: u32,
+) -> PyResult<Vec<PyPairRateResult>> {
+    core_cli_api::pair_rate_factored(&target_groups, &target_factors, &players, &teammates, head, n, keep_rq, thread)
+        .map(|results| results.into_iter().map(Into::into).collect())
+        .map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (name, old=false, minions=false))]
+/// 返回单名 DIY 文本；old 切换旧格式，minions 附带随从，非法组合抛出带 code 异常。
+pub fn to_diy(name: String, old: bool, minions: bool) -> PyResult<String> {
+    core_cli_api::to_diy(&name, old, minions).map_err(map_cli_error)
+}
+
+#[pyfunction(signature = (names, old=false, minions=false))]
+/// 按输入顺序返回独立 DIY 字符串列表；任一转换失败则整次调用抛异常。
+pub fn to_diy_batch(names: Vec<String>, old: bool, minions: bool) -> PyResult<Vec<String>> {
+    core_cli_api::to_diy_batch(&names, old, minions).map_err(map_cli_error)
+}
+
+#[pyfunction]
+/// 返回图标形状与颜色索引对象，不执行战斗，也不返回 PNG 字节。
+pub fn icon_info(name: String) -> PyIconInfo { core_cli_api::icon_info(&name).into() }
+
+#[pyfunction(signature = (content, double_plus=false))]
+/// 将每个非空行解析为一个多行队伍文本；double_plus 控制使用 ++ 还是 + 分隔。
+pub fn parse_group_lines(content: String, double_plus: bool) -> Vec<String> {
+    core_cli_api::parse_group_lines(&content, double_plus)
+}
+
+#[pyfunction(signature = (raw, max_rounds))]
+/// 执行默认 custom Runtime 并返回规范诊断轨迹 dict；max_rounds 必须为正数。
+/// 全部回合及状态保存在内存中，适合诊断而非无限流式播放。
+pub fn default_custom_runtime_normalized_run(py: Python<'_>, raw: String, max_rounds: usize) -> PyResult<Py<PyAny>> {
+    let run = core_cli_api::default_custom_runtime_normalized_run(&raw, max_rounds).map_err(map_cli_error)?;
+    Ok(normalized_run_to_pydict(py, run.into())?.into_any().unbind())
+}
+
+fn format_rate(value: f64, precision: usize) -> String {
+    let value = if value.abs() < 0.5_f64 * 10_f64.powi(-(precision as i32)) {
+        0.0
+    } else {
+        value
+    };
+    format!("{value:.precision$}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList};
+
+    #[test]
+    fn default_custom_runtime_normalized_run_returns_python_dict_golden_shape() {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = default_custom_runtime_normalized_run(py, "left@red\n\nright@blue\n".to_string(), 1)
+                .expect("default custom runtime normalized run should execute");
+            let dict = value.bind(py).cast::<PyDict>().expect("normalized run should be a dict");
+
+            assert_eq!(
+                dict.get_item("winner_team")
+                    .expect("winner_team key should exist")
+                    .expect("winner_team should not be missing")
+                    .is_none(),
+                true
+            );
+            assert!(
+                dict.get_item("guard_exhausted")
+                    .expect("guard_exhausted key should exist")
+                    .expect("guard_exhausted should not be missing")
+                    .extract::<bool>()
+                    .expect("guard_exhausted should be bool")
+            );
+            assert_eq!(
+                dict.get_item("total_score")
+                    .expect("total_score key should exist")
+                    .expect("total_score should not be None")
+                    .extract::<u64>()
+                    .expect("total_score should be u64"),
+                77
+            );
+
+            let rounds_item = dict
+                .get_item("rounds")
+                .expect("rounds key should exist")
+                .expect("rounds should not be None");
+            let rounds = rounds_item.cast::<PyList>().expect("rounds should be a list");
+            assert_eq!(rounds.len().expect("rounds should be sized"), 1);
+            let round = rounds.get_item(0).expect("first round should exist");
+            let round = round.cast::<PyDict>().expect("round should be a dict");
+
+            assert!(
+                round
+                    .get_item("winner_team")
+                    .expect("winner_team key should exist")
+                    .expect("winner_team should not be missing")
+                    .is_none()
+            );
+            assert_eq!(round.get_item("round").unwrap().unwrap().extract::<u64>().unwrap(), 1);
+            assert_eq!(round.get_item("total_score").unwrap().unwrap().extract::<u64>().unwrap(), 77);
+            assert_eq!(round.get_item("rng_i").unwrap().unwrap().extract::<u32>().unwrap(), 74);
+            assert_eq!(round.get_item("rng_j").unwrap().unwrap().extract::<u32>().unwrap(), 92);
+            assert_eq!(
+                round.get_item("entity_ids").unwrap().unwrap().extract::<Vec<usize>>().unwrap(),
+                vec![1, 2]
+            );
+            assert_eq!(
+                round.get_item("teams").unwrap().unwrap().extract::<Vec<usize>>().unwrap(),
+                vec![0, 1]
+            );
+            assert_eq!(
+                round.get_item("hp").unwrap().unwrap().extract::<Vec<i32>>().unwrap(),
+                vec![262, 288]
+            );
+            assert_eq!(
+                round.get_item("magic_point").unwrap().unwrap().extract::<Vec<i32>>().unwrap(),
+                vec![23, 16]
+            );
+            assert_eq!(
+                round.get_item("defense").unwrap().unwrap().extract::<Vec<i32>>().unwrap(),
+                vec![6, 56]
+            );
+            assert_eq!(
+                round.get_item("resistance").unwrap().unwrap().extract::<Vec<i32>>().unwrap(),
+                vec![52, 25]
+            );
+            assert_eq!(
+                round.get_item("alive").unwrap().unwrap().extract::<Vec<bool>>().unwrap(),
+                vec![true, true]
+            );
+            assert_eq!(
+                round.get_item("round_order").unwrap().unwrap().extract::<Vec<usize>>().unwrap(),
+                vec![0, 1]
+            );
+            assert_eq!(
+                round.get_item("flat_alive").unwrap().unwrap().extract::<Vec<usize>>().unwrap(),
+                vec![0, 1]
+            );
+            assert_eq!(
+                round.get_item("team_alive").unwrap().unwrap().extract::<Vec<Vec<usize>>>().unwrap(),
+                vec![vec![0], vec![1]]
+            );
+            assert_eq!(
+                round.get_item("alive_group_count").unwrap().unwrap().extract::<usize>().unwrap(),
+                2
+            );
+
+            let actions_item = round.get_item("actions").unwrap().unwrap();
+            let actions = actions_item.cast::<PyList>().unwrap();
+            assert_eq!(actions.len().expect("actions should be sized"), 1);
+            let action_item = actions.get_item(0).unwrap();
+            let action = action_item.cast::<PyDict>().unwrap();
+            assert_eq!(action.get_item("round").unwrap().unwrap().extract::<u64>().unwrap(), 1);
+            assert_eq!(action.get_item("actor").unwrap().unwrap().extract::<usize>().unwrap(), 1);
+            assert_eq!(action.get_item("target").unwrap().unwrap().extract::<usize>().unwrap(), 0);
+            assert_eq!(action.get_item("amount").unwrap().unwrap().extract::<i32>().unwrap(), 36);
+
+            let frames_item = round.get_item("frames").unwrap().unwrap();
+            let frames = frames_item.cast::<PyList>().unwrap();
+            assert_eq!(frames.len().expect("frames should be sized"), 3);
+            let frame_item = frames.get_item(0).unwrap();
+            let frame = frame_item.cast::<PyDict>().unwrap();
+            assert_eq!(
+                frame.get_item("message").unwrap().unwrap().extract::<String>().unwrap(),
+                "[0]发起攻击"
+            );
+            assert_eq!(frame.get_item("caster").unwrap().unwrap().extract::<usize>().unwrap(), 1);
+            assert_eq!(frame.get_item("target").unwrap().unwrap().extract::<usize>().unwrap(), 0);
+            assert!(frame.get_item("targets").unwrap().unwrap().extract::<Vec<usize>>().unwrap().is_empty());
+            assert!(frame.get_item("param").unwrap().unwrap().is_none());
+            assert_eq!(frame.get_item("score").unwrap().unwrap().extract::<u32>().unwrap(), 0);
+            assert_eq!(frame.get_item("delay0").unwrap().unwrap().extract::<i32>().unwrap(), 1000);
+            assert_eq!(frame.get_item("delay1").unwrap().unwrap().extract::<i32>().unwrap(), 100);
+            assert_eq!(
+                frame.get_item("update_type").unwrap().unwrap().extract::<String>().unwrap(),
+                "none"
+            );
+
+            let frame_item = frames.get_item(1).unwrap();
+            let frame = frame_item.cast::<PyDict>().unwrap();
+            assert_eq!(
+                frame.get_item("message").unwrap().unwrap().extract::<String>().unwrap(),
+                "[1]受到[2]点伤害"
+            );
+            assert_eq!(frame.get_item("caster").unwrap().unwrap().extract::<usize>().unwrap(), 1);
+            assert_eq!(frame.get_item("target").unwrap().unwrap().extract::<usize>().unwrap(), 0);
+            assert!(frame.get_item("targets").unwrap().unwrap().extract::<Vec<usize>>().unwrap().is_empty());
+            assert!(frame.get_item("param").unwrap().unwrap().is_none());
+            assert_eq!(frame.get_item("score").unwrap().unwrap().extract::<u32>().unwrap(), 77);
+            assert_eq!(frame.get_item("delay0").unwrap().unwrap().extract::<i32>().unwrap(), 1154);
+            assert_eq!(frame.get_item("delay1").unwrap().unwrap().extract::<i32>().unwrap(), 100);
+            assert_eq!(
+                frame.get_item("update_type").unwrap().unwrap().extract::<String>().unwrap(),
+                "none"
+            );
+
+            let frame_item = frames.get_item(2).unwrap();
+            let frame = frame_item.cast::<PyDict>().unwrap();
+            assert_eq!(frame.get_item("message").unwrap().unwrap().extract::<String>().unwrap(), "\n");
+            assert_eq!(frame.get_item("caster").unwrap().unwrap().extract::<usize>().unwrap(), 0);
+            assert_eq!(frame.get_item("target").unwrap().unwrap().extract::<usize>().unwrap(), 0);
+            assert!(frame.get_item("targets").unwrap().unwrap().extract::<Vec<usize>>().unwrap().is_empty());
+            assert!(frame.get_item("param").unwrap().unwrap().is_none());
+            assert_eq!(frame.get_item("score").unwrap().unwrap().extract::<u32>().unwrap(), 0);
+            assert_eq!(frame.get_item("delay0").unwrap().unwrap().extract::<i32>().unwrap(), 0);
+            assert_eq!(frame.get_item("delay1").unwrap().unwrap().extract::<i32>().unwrap(), 0);
+            assert_eq!(
+                frame.get_item("update_type").unwrap().unwrap().extract::<String>().unwrap(),
+                "next_line"
+            );
+        });
+    }
+
+    #[test]
+    fn default_custom_runtime_normalized_run_rejects_zero_max_rounds() {
+        Python::initialize();
+        Python::attach(|py| {
+            let err = default_custom_runtime_normalized_run(py, "left@red\n\nright@blue\n".to_string(), 0)
+                .expect_err("default custom runtime normalized run should reject zero max rounds");
+
+            assert_eq!(err.to_string(), "InvalidInputError: runtime max_rounds must be positive");
+            assert!(err.matches(py, py.get_type::<PyValueError>()).unwrap());
+        });
+    }
+}
+
+#[pyclass(extends=PyValueError)]
+#[pyo3(name = "InvalidArgumentError")]
+pub struct PyInvalidArgumentError;
+#[pymethods]
+impl PyInvalidArgumentError {
+    #[new]
+    fn new(_message: &pyo3::Bound<'_, PyAny>) -> Self { Self }
+    #[getter]
+    fn code(&self) -> &'static str { core_cli_api::CliApiErrorCode::InvalidArgument.as_str() }
+}
+
+#[pyclass(extends=PyValueError)]
+#[pyo3(name = "UnsupportedOptionError")]
+pub struct PyUnsupportedOptionError;
+#[pymethods]
+impl PyUnsupportedOptionError {
+    #[new]
+    fn new(_message: &pyo3::Bound<'_, PyAny>) -> Self { Self }
+    #[getter]
+    fn code(&self) -> &'static str { core_cli_api::CliApiErrorCode::UnsupportedOption.as_str() }
+}
+
+#[pyclass(extends=PyRuntimeError)]
+#[pyo3(name = "TswnInternalError")]
+pub struct PyInternalError;
+#[pymethods]
+impl PyInternalError {
+    #[new]
+    fn new(_message: &pyo3::Bound<'_, PyAny>) -> Self { Self }
+    #[getter]
+    fn code(&self) -> &'static str { core_cli_api::CliApiErrorCode::InternalError.as_str() }
+}

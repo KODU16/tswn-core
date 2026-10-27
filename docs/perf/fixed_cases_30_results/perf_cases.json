@@ -1,0 +1,813 @@
+{
+  "generated_at_unix": 1780550642,
+  "version": "0.3.10",
+  "source": "fixed-case-dir",
+  "library": "D:\\githubs\\namer\\tswn-core\\tests/sqp6000.txt",
+  "case_dir": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30",
+  "modes": [
+    "1v1",
+    "2v2",
+    "3v3v3",
+    "ffa_4",
+    "ffa_6",
+    "ffa_8"
+  ],
+  "case_offset_per_mode": 0,
+  "max_cases_per_mode": 4000,
+  "sample_runs": 64,
+  "bench_runs": 13000,
+  "select_count": 20,
+  "shuffle_seed": 1592598566,
+  "thread": 1,
+  "selected": [
+    {
+      "rank": 1,
+      "id": "1v1-6a2ace7473581042",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "6a2ace7473581042",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\01_1v1-6a2ace7473581042.txt",
+      "players": [
+        "Serpensortia EPD)sJjd@Shabby_fish",
+        "叠加宇宙 #Lvc5kphcU@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6426,
+        "elapsed_ms": 96.1161,
+        "us_per_battle": 7.393538461538461,
+        "battles_per_s": 135253.09495495554,
+        "init_us_per_battle": 3.100215384615385,
+        "fight_us_per_battle": 3.718153846153846
+      }
+    },
+    {
+      "rank": 2,
+      "id": "1v1-e7c53243721e6551",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "e7c53243721e6551",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\02_1v1-e7c53243721e6551.txt",
+      "players": [
+        "Misc #NfvZQay71@Shabby_fish",
+        "Serpensortia EPD)sJjd@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6302,
+        "elapsed_ms": 143.30970000000002,
+        "us_per_battle": 11.023769230769231,
+        "battles_per_s": 90712.63145481428,
+        "init_us_per_battle": 3.117192307692308,
+        "fight_us_per_battle": 7.263846153846154
+      }
+    },
+    {
+      "rank": 3,
+      "id": "1v1-54ab99b39babdf0f",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "54ab99b39babdf0f",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\03_1v1-54ab99b39babdf0f.txt",
+      "players": [
+        "Woke #Iakt0mOca@Shabby_fish",
+        "Fish Hc='^hxt@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 8127,
+        "elapsed_ms": 332.335,
+        "us_per_battle": 25.564230769230768,
+        "battles_per_s": 39117.15588186619,
+        "init_us_per_battle": 3.1568846153846155,
+        "fight_us_per_battle": 21.614984615384614
+      }
+    },
+    {
+      "rank": 4,
+      "id": "ffa_4-65b64b29a44b050a",
+      "mode": "ffa_4",
+      "player_count": 4,
+      "input_hash": "65b64b29a44b050a",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\04_ffa_4-65b64b29a44b050a.txt",
+      "players": [
+        "Misc #NfvZQay71@Shabby_fish",
+        "Serpensortia EPD)sJjd@Shabby_fish",
+        "叠加宇宙 #Lvc5kphcU@Shabby_fish",
+        "包围 #qlpAoltUy@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 2751,
+        "elapsed_ms": 413.1652,
+        "us_per_battle": 31.78192307692308,
+        "battles_per_s": 31464.411813966908,
+        "init_us_per_battle": 5.524138461538461,
+        "fight_us_per_battle": 25.110661538461535
+      }
+    },
+    {
+      "rank": 5,
+      "id": "2v2-413b8db64b73aeb3",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "413b8db64b73aeb3",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\05_2v2-413b8db64b73aeb3.txt",
+      "players": [
+        "涝避吻戳背@Shabby_fish",
+        "luogu.com.cn/paste/1uzzsagy@Shabby_fish",
+        "高潮迭起 #sV8L7Dvtn@Shabby_fish",
+        "天皇表示赞同 #ZkdwdhY2u@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6764,
+        "elapsed_ms": 432.6049,
+        "us_per_battle": 33.27723076923077,
+        "battles_per_s": 30050.514915573076,
+        "init_us_per_battle": 5.482815384615385,
+        "fight_us_per_battle": 26.5275
+      }
+    },
+    {
+      "rank": 6,
+      "id": "1v1-496bdc41e43ca13d",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "496bdc41e43ca13d",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\06_1v1-496bdc41e43ca13d.txt",
+      "players": [
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 5759,
+        "elapsed_ms": 461.9939,
+        "us_per_battle": 35.53792307692308,
+        "battles_per_s": 28138.89966945451,
+        "init_us_per_battle": 3.612723076923077,
+        "fight_us_per_battle": 30.820107692307694
+      }
+    },
+    {
+      "rank": 7,
+      "id": "ffa_4-fe06fba31f6f20b2",
+      "mode": "ffa_4",
+      "player_count": 4,
+      "input_hash": "fe06fba31f6f20b2",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\07_ffa_4-fe06fba31f6f20b2.txt",
+      "players": [
+        "Double_Me #8JgQwuzxg@Shabby_fish",
+        "Wingardium_Leviosa `f]qqlMN@Shabby_fish",
+        "El_Viejo_y_El_Mar #s2ucwVD6i@Shabby_fish",
+        "美国军事研发 #prHTomCPE@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 1733,
+        "elapsed_ms": 656.2134,
+        "us_per_battle": 50.47792307692308,
+        "battles_per_s": 19810.628676586002,
+        "init_us_per_battle": 5.539676923076923,
+        "fight_us_per_battle": 43.691923076923075
+      }
+    },
+    {
+      "rank": 8,
+      "id": "ffa_4-d649d69f2c13f317",
+      "mode": "ffa_4",
+      "player_count": 4,
+      "input_hash": "d649d69f2c13f317",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\08_ffa_4-d649d69f2c13f317.txt",
+      "players": [
+        "万岁冲锋 #lXLwrZ6to@Shabby_fish",
+        "涝避吻戳背@Shabby_fish",
+        "luogu.com.cn/paste/1uzzsagy@Shabby_fish",
+        "高潮迭起 #sV8L7Dvtn@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6940,
+        "elapsed_ms": 834.1406000000001,
+        "us_per_battle": 64.16461538461539,
+        "battles_per_s": 15584.902593159954,
+        "init_us_per_battle": 5.847423076923077,
+        "fight_us_per_battle": 56.67254615384615
+      }
+    },
+    {
+      "rank": 9,
+      "id": "2v2-7a387c5039aaacd7",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "7a387c5039aaacd7",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\09_2v2-7a387c5039aaacd7.txt",
+      "players": [
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish",
+        "轰炸机黑手党 #SFFjOYuBS@Shabby_fish",
+        "菲奇号 #Tdnymt2F9@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 7665,
+        "elapsed_ms": 814.3678,
+        "us_per_battle": 62.64361538461539,
+        "battles_per_s": 15963.303067729348,
+        "init_us_per_battle": 5.732538461538462,
+        "fight_us_per_battle": 55.27190769230769
+      }
+    },
+    {
+      "rank": 10,
+      "id": "ffa_6-26e1ca494ce74ca8",
+      "mode": "ffa_6",
+      "player_count": 6,
+      "input_hash": "26e1ca494ce74ca8",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\10_ffa_6-26e1ca494ce74ca8.txt",
+      "players": [
+        "Misc #NfvZQay71@Shabby_fish",
+        "Serpensortia EPD)sJjd@Shabby_fish",
+        "叠加宇宙 #Lvc5kphcU@Shabby_fish",
+        "包围 #qlpAoltUy@Shabby_fish",
+        "Fly_Away #U79itFL9R@Shabby_fish",
+        "Deletrius #CiMrE2Jq@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 1935,
+        "elapsed_ms": 746.1084999999999,
+        "us_per_battle": 57.392923076923076,
+        "battles_per_s": 17423.73930869304,
+        "init_us_per_battle": 7.8406153846153845,
+        "fight_us_per_battle": 47.99357692307692
+      }
+    },
+    {
+      "rank": 11,
+      "id": "2v2-7fe66144e8c9c30e",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "7fe66144e8c9c30e",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\11_2v2-7fe66144e8c9c30e.txt",
+      "players": [
+        "Woke #Iakt0mOca@Shabby_fish",
+        "Fish Hc='^hxt@Shabby_fish",
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6117,
+        "elapsed_ms": 1048.9497999999999,
+        "us_per_battle": 80.68838461538462,
+        "battles_per_s": 12393.348089679794,
+        "init_us_per_battle": 5.305907692307692,
+        "fight_us_per_battle": 73.69843076923077
+      }
+    },
+    {
+      "rank": 12,
+      "id": "ffa_8-f9ed6e2bccd03417",
+      "mode": "ffa_8",
+      "player_count": 8,
+      "input_hash": "f9ed6e2bccd03417",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\12_ffa_8-f9ed6e2bccd03417.txt",
+      "players": [
+        "菲奇号 #Tdnymt2F9@Shabby_fish",
+        "Web #1Gp6CXWSQ@Shabby_fish",
+        "Double_Me #8JgQwuzxg@Shabby_fish",
+        "Wingardium_Leviosa `f]qqlMN@Shabby_fish",
+        "El_Viejo_y_El_Mar #s2ucwVD6i@Shabby_fish",
+        "美国军事研发 #prHTomCPE@Shabby_fish",
+        "暗夜猎手 #6bMe65ZWy@Shabby_fish",
+        "行圖 #rBwlTuy18@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 2378,
+        "elapsed_ms": 1204.6749000000002,
+        "us_per_battle": 92.66723076923077,
+        "battles_per_s": 10791.293153032406,
+        "init_us_per_battle": 10.65403846153846,
+        "fight_us_per_battle": 79.74451538461538
+      }
+    },
+    {
+      "rank": 13,
+      "id": "3v3v3-9798f76820f40b15",
+      "mode": "3v3v3",
+      "player_count": 9,
+      "input_hash": "9798f76820f40b15",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\13_3v3v3-9798f76820f40b15.txt",
+      "players": [
+        "暗夜猎手 #6bMe65ZWy@Shabby_fish",
+        "行圖 #rBwlTuy18@Shabby_fish",
+        "Misc #NfvZQay71@Shabby_fish",
+        "Serpensortia EPD)sJjd@Shabby_fish",
+        "叠加宇宙 #Lvc5kphcU@Shabby_fish",
+        "包围 #qlpAoltUy@Shabby_fish",
+        "Fly_Away #U79itFL9R@Shabby_fish",
+        "Deletrius #CiMrE2Jq@Shabby_fish",
+        "生生不息 #PGfQuKE6p@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 4455,
+        "elapsed_ms": 1319.3071,
+        "us_per_battle": 101.48515384615385,
+        "battles_per_s": 9853.657272063494,
+        "init_us_per_battle": 11.95006923076923,
+        "fight_us_per_battle": 87.20382307692307
+      }
+    },
+    {
+      "rank": 14,
+      "id": "ffa_4-6088edc9d20c52cb",
+      "mode": "ffa_4",
+      "player_count": 4,
+      "input_hash": "6088edc9d20c52cb",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\14_ffa_4-6088edc9d20c52cb.txt",
+      "players": [
+        "Fish Hc='^hxt@Shabby_fish",
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish",
+        "轰炸机黑手党 #SFFjOYuBS@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 1258,
+        "elapsed_ms": 1191.3633,
+        "us_per_battle": 91.64330769230769,
+        "battles_per_s": 10911.868780916788,
+        "init_us_per_battle": 5.8071153846153845,
+        "fight_us_per_battle": 84.01292307692307
+      }
+    },
+    {
+      "rank": 15,
+      "id": "ffa_8-9ebee8b9ec8167a2",
+      "mode": "ffa_8",
+      "player_count": 8,
+      "input_hash": "9ebee8b9ec8167a2",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\15_ffa_8-9ebee8b9ec8167a2.txt",
+      "players": [
+        "包围 #qlpAoltUy@Shabby_fish",
+        "Fly_Away #U79itFL9R@Shabby_fish",
+        "Deletrius #CiMrE2Jq@Shabby_fish",
+        "生生不息 #PGfQuKE6p@Shabby_fish",
+        "万岁冲锋 #lXLwrZ6to@Shabby_fish",
+        "涝避吻戳背@Shabby_fish",
+        "luogu.com.cn/paste/1uzzsagy@Shabby_fish",
+        "高潮迭起 #sV8L7Dvtn@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 1061,
+        "elapsed_ms": 1718.9079000000002,
+        "us_per_battle": 132.22361538461539,
+        "battles_per_s": 7562.941563070365,
+        "init_us_per_battle": 11.135953846153846,
+        "fight_us_per_battle": 118.3420076923077
+      }
+    },
+    {
+      "rank": 16,
+      "id": "ffa_4-192153f9f0a94ca5",
+      "mode": "ffa_4",
+      "player_count": 4,
+      "input_hash": "192153f9f0a94ca5",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\16_ffa_4-192153f9f0a94ca5.txt",
+      "players": [
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish",
+        "Mythic spX'dFa`@Shabby_fish",
+        "生死荣辱 #K3w0bTias@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 2748,
+        "elapsed_ms": 1301.4138,
+        "us_per_battle": 100.10869230769231,
+        "battles_per_s": 9989.136429934892,
+        "init_us_per_battle": 5.815561538461539,
+        "fight_us_per_battle": 92.35767692307692
+      }
+    },
+    {
+      "rank": 17,
+      "id": "ffa_8-2579e5a067210672",
+      "mode": "ffa_8",
+      "player_count": 8,
+      "input_hash": "2579e5a067210672",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\17_ffa_8-2579e5a067210672.txt",
+      "players": [
+        "Riddikulus K=DEXV_&@Shabby_fish",
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish",
+        "Mythic spX'dFa`@Shabby_fish",
+        "生死荣辱 #K3w0bTias@Shabby_fish",
+        "切馋肾吭缺@Shabby_fish",
+        "可畏号 #Zr1exvCRC@Shabby_fish",
+        "Superpower #yWBFbBGZl@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 1327,
+        "elapsed_ms": 2235.0457,
+        "us_per_battle": 171.92653846153846,
+        "battles_per_s": 5816.4358786936655,
+        "init_us_per_battle": 11.429907692307692,
+        "fight_us_per_battle": 157.2306153846154
+      }
+    },
+    {
+      "rank": 18,
+      "id": "3v3v3-54668369326a8790",
+      "mode": "3v3v3",
+      "player_count": 9,
+      "input_hash": "54668369326a8790",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\18_3v3v3-54668369326a8790.txt",
+      "players": [
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish",
+        "轰炸机黑手党 #SFFjOYuBS@Shabby_fish",
+        "菲奇号 #Tdnymt2F9@Shabby_fish",
+        "Web #1Gp6CXWSQ@Shabby_fish",
+        "Double_Me #8JgQwuzxg@Shabby_fish",
+        "Wingardium_Leviosa `f]qqlMN@Shabby_fish",
+        "El_Viejo_y_El_Mar #s2ucwVD6i@Shabby_fish",
+        "美国军事研发 #prHTomCPE@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 5744,
+        "elapsed_ms": 2163.361,
+        "us_per_battle": 166.4123846153846,
+        "battles_per_s": 6009.168141609282,
+        "init_us_per_battle": 12.541099999999998,
+        "fight_us_per_battle": 150.7263153846154
+      }
+    },
+    {
+      "rank": 19,
+      "id": "3v3v3-3dffbc5675879b9a",
+      "mode": "3v3v3",
+      "player_count": 9,
+      "input_hash": "3dffbc5675879b9a",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\19_3v3v3-3dffbc5675879b9a.txt",
+      "players": [
+        "高潮迭起 #sV8L7Dvtn@Shabby_fish",
+        "天皇表示赞同 #ZkdwdhY2u@Shabby_fish",
+        "Riddikulus K=DEXV_&@Shabby_fish",
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish",
+        "Mythic spX'dFa`@Shabby_fish",
+        "生死荣辱 #K3w0bTias@Shabby_fish",
+        "切馋肾吭缺@Shabby_fish",
+        "可畏号 #Zr1exvCRC@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 2830,
+        "elapsed_ms": 2618.258,
+        "us_per_battle": 201.40446153846153,
+        "battles_per_s": 4965.133306190604,
+        "init_us_per_battle": 12.236992307692308,
+        "fight_us_per_battle": 185.5935
+      }
+    },
+    {
+      "rank": 20,
+      "id": "3v3v3-60d217cac8e880d6",
+      "mode": "3v3v3",
+      "player_count": 9,
+      "input_hash": "60d217cac8e880d6",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\20_3v3v3-60d217cac8e880d6.txt",
+      "players": [
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish",
+        "Mythic spX'dFa`@Shabby_fish",
+        "生死荣辱 #K3w0bTias@Shabby_fish",
+        "切馋肾吭缺@Shabby_fish",
+        "可畏号 #Zr1exvCRC@Shabby_fish",
+        "Superpower #yWBFbBGZl@Shabby_fish",
+        "Accio #wFS52SNn@Shabby_fish",
+        "Mythic Jf)qvWCQ@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 3388,
+        "elapsed_ms": 2676.0418,
+        "us_per_battle": 205.8493076923077,
+        "battles_per_s": 4857.921128137834,
+        "init_us_per_battle": 12.48686923076923,
+        "fight_us_per_battle": 189.80231538461538
+      }
+    },
+    {
+      "rank": 21,
+      "id": "1v1-2cf20e674201187f",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "2cf20e674201187f",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\21_1v1-2cf20e674201187f.txt",
+      "players": [
+        "a",
+        "b"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 5790,
+        "elapsed_ms": 198.94899999999998,
+        "us_per_battle": 15.30376923076923,
+        "battles_per_s": 65343.37945905735,
+        "init_us_per_battle": 2.4045,
+        "fight_us_per_battle": 12.23576923076923
+      }
+    },
+    {
+      "rank": 22,
+      "id": "1v1-e6497125749fa0a3",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "e6497125749fa0a3",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\22_1v1-e6497125749fa0a3.txt",
+      "players": [
+        "涝避吻戳背@Shabby_fish",
+        "luogu.com.cn/paste/1uzzsagy@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6297,
+        "elapsed_ms": 146.68419999999998,
+        "us_per_battle": 11.283384615384616,
+        "battles_per_s": 88625.76882854459,
+        "init_us_per_battle": 3.0508307692307692,
+        "fight_us_per_battle": 7.603646153846153
+      }
+    },
+    {
+      "rank": 23,
+      "id": "1v1-d985a03666ef702e",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "d985a03666ef702e",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\23_1v1-d985a03666ef702e.txt",
+      "players": [
+        "Selfless #agSikY6zg@Shabby_fish",
+        "FIND_YOU #Y4PY40Pa3@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 5759,
+        "elapsed_ms": 435.5203,
+        "us_per_battle": 33.50153846153846,
+        "battles_per_s": 29849.354898038047,
+        "init_us_per_battle": 3.450630769230769,
+        "fight_us_per_battle": 29.024453846153847
+      }
+    },
+    {
+      "rank": 24,
+      "id": "1v1-fb453d38e6c4cf02",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "fb453d38e6c4cf02",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\24_1v1-fb453d38e6c4cf02.txt",
+      "players": [
+        "Woke #Iakt0mOca@Shabby_fish",
+        "Fish Hc='^hxt@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 8127,
+        "elapsed_ms": 322.60060000000004,
+        "us_per_battle": 24.815384615384616,
+        "battles_per_s": 40297.50719620484,
+        "init_us_per_battle": 3.106223076923077,
+        "fight_us_per_battle": 20.936615384615383
+      }
+    },
+    {
+      "rank": 25,
+      "id": "1v1-d9ead8dd53251df2",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "d9ead8dd53251df2",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\25_1v1-d9ead8dd53251df2.txt",
+      "players": [
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 7513,
+        "elapsed_ms": 512.2221000000001,
+        "us_per_battle": 39.40169230769231,
+        "battles_per_s": 25379.615600342117,
+        "init_us_per_battle": 3.5568461538461538,
+        "fight_us_per_battle": 34.6616
+      }
+    },
+    {
+      "rank": 26,
+      "id": "1v1-7822d33f277cc830",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "7822d33f277cc830",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\26_1v1-7822d33f277cc830.txt",
+      "players": [
+        "Double_Me #8JgQwuzxg@Shabby_fish",
+        "Wingardium_Leviosa `f]qqlMN@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 4060,
+        "elapsed_ms": 359.606,
+        "us_per_battle": 27.662,
+        "battles_per_s": 36150.676017641534,
+        "init_us_per_battle": 3.1817461538461536,
+        "fight_us_per_battle": 23.7234
+      }
+    },
+    {
+      "rank": 27,
+      "id": "1v1-e4d73d1d7ae3ebe9",
+      "mode": "1v1",
+      "player_count": 2,
+      "input_hash": "e4d73d1d7ae3ebe9",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\27_1v1-e4d73d1d7ae3ebe9.txt",
+      "players": [
+        "Riddikulus K=DEXV_&@Shabby_fish",
+        "Superpower #yWBFbBGZl@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 5875,
+        "elapsed_ms": 211.01739999999998,
+        "us_per_battle": 16.232076923076924,
+        "battles_per_s": 61606.29407811868,
+        "init_us_per_battle": 3.7171000000000003,
+        "fight_us_per_battle": 11.66946923076923
+      }
+    },
+    {
+      "rank": 28,
+      "id": "2v2-f5743e32254e64e5",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "f5743e32254e64e5",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\28_2v2-f5743e32254e64e5.txt",
+      "players": [
+        "Deletrius #IaqKFJMD@Shabby_fish",
+        "可畏号 #AnokZ2in4@Shabby_fish",
+        "轰炸机黑手党 #SFFjOYuBS@Shabby_fish",
+        "菲奇号 #Tdnymt2F9@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 7665,
+        "elapsed_ms": 823.9064999999999,
+        "us_per_battle": 63.377384615384614,
+        "battles_per_s": 15778.48942810865,
+        "init_us_per_battle": 5.815992307692308,
+        "fight_us_per_battle": 55.86866923076923
+      }
+    },
+    {
+      "rank": 29,
+      "id": "2v2-b1e08a4b5faf6712",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "b1e08a4b5faf6712",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\29_2v2-b1e08a4b5faf6712.txt",
+      "players": [
+        "包围 #qlpAoltUy@Shabby_fish",
+        "Fly_Away #U79itFL9R@Shabby_fish",
+        "万岁冲锋 #lXLwrZ6to@Shabby_fish",
+        "高潮迭起 #sV8L7Dvtn@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 6813,
+        "elapsed_ms": 752.8471,
+        "us_per_battle": 57.911307692307695,
+        "battles_per_s": 17267.782528484204,
+        "init_us_per_battle": 5.598976923076923,
+        "fight_us_per_battle": 50.794376923076925
+      }
+    },
+    {
+      "rank": 30,
+      "id": "2v2-a2fa863c153307e2",
+      "mode": "2v2",
+      "player_count": 4,
+      "input_hash": "a2fa863c153307e2",
+      "input_path": "D:\\githubs\\namer\\tswn-core\\docs/perf/fixed_cases_30\\30_2v2-a2fa863c153307e2.txt",
+      "players": [
+        "Selfless #agSikY6zg@Shabby_fish",
+        "Mythic spX'dFa`@Shabby_fish",
+        "生死荣辱 #K3w0bTias@Shabby_fish",
+        "切馋肾吭缺@Shabby_fish"
+      ],
+      "sample": null,
+      "benchmark": {
+        "runs": 13000,
+        "wins": 7246,
+        "elapsed_ms": 720.1647,
+        "us_per_battle": 55.39723076923077,
+        "battles_per_s": 18051.426291791307,
+        "init_us_per_battle": 5.855984615384616,
+        "fight_us_per_battle": 47.88361538461538
+      }
+    }
+  ],
+  "summaries": [
+    {
+      "group": "overall",
+      "cases": 30,
+      "runs": 390000,
+      "wins": 150853,
+      "elapsed_ms": 26891.1963,
+      "us_per_battle": 68.95178538461539,
+      "battles_per_s": 14502.887697859689,
+      "init_us_per_battle": 6.268552307692308,
+      "fight_us_per_battle": 61.059964871794875
+    },
+    {
+      "group": "core_1v1_2v2",
+      "cases": 17,
+      "runs": 221000,
+      "wins": 112305,
+      "elapsed_ms": 7813.195099999999,
+      "us_per_battle": 35.35382398190045,
+      "battles_per_s": 28285.483361345992,
+      "init_us_per_battle": 4.0733592760181,
+      "fight_us_per_battle": 30.19509095022625
+    },
+    {
+      "group": "one_v_one",
+      "cases": 11,
+      "runs": 143000,
+      "wins": 70035,
+      "elapsed_ms": 3220.3543000000004,
+      "us_per_battle": 22.519960139860142,
+      "battles_per_s": 44405.05195344499,
+      "init_us_per_battle": 3.223172027972028,
+      "fight_us_per_battle": 18.479276923076924
+    },
+    {
+      "group": "two_v_two",
+      "cases": 6,
+      "runs": 78000,
+      "wins": 42270,
+      "elapsed_ms": 4592.8408,
+      "us_per_battle": 58.88257435897436,
+      "battles_per_s": 16982.953121301307,
+      "init_us_per_battle": 5.632035897435898,
+      "fight_us_per_battle": 51.67408333333333
+    },
+    {
+      "group": "stress_multi",
+      "cases": 8,
+      "runs": 104000,
+      "wins": 23118,
+      "elapsed_ms": 14681.7049,
+      "us_per_battle": 141.17023942307694,
+      "battles_per_s": 7083.645987190493,
+      "init_us_per_battle": 11.28444326923077,
+      "fight_us_per_battle": 127.07958365384614
+    }
+  ]
+}
