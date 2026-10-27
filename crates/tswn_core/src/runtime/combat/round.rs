@@ -411,7 +411,7 @@ impl CombatRuntime {
             // 玩家点名要用这个技能：目标选择按「不挑目标」的宽松口径，
             // 避免因为 AI 的 smart 过滤（例如瘟疫只挑 160~400 血的目标）而放不出来。
             let prepared = if mp >= req_mp {
-                self.prepare_forced_builtin_skill(actor, forced_skill, false)
+                self.prepare_forced_builtin_skill(actor, forced_skill)
             } else {
                 None
             };
@@ -721,7 +721,6 @@ impl CombatRuntime {
         &mut self,
         actor: EntityIdx,
         skill_id: u32,
-        smart: bool,
     ) -> Option<PreparedBuiltinSkillAction> {
         let builtin_skill = public_builtin_skill(skill_id)?;
         let fixed_lane = {
@@ -740,7 +739,7 @@ impl CombatRuntime {
             }
             lane
         };
-        let targets = self.select_forced_skill_targets(actor, builtin_skill, smart);
+        let targets = self.select_forced_skill_targets(actor, builtin_skill);
         let allows_empty_targets = builtin_skill == BuiltinActiveSkill::Assassinate
             && self
                 .entities
@@ -762,8 +761,8 @@ impl CombatRuntime {
         &mut self,
         actor: EntityIdx,
         builtin_skill: BuiltinActiveSkill,
-        smart: bool,
     ) -> PreparedTargetList {
+        let smart = false;
         match builtin_skill {
             BuiltinActiveSkill::Fire
             | BuiltinActiveSkill::Thunder
