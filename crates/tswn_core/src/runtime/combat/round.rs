@@ -408,8 +408,10 @@ impl CombatRuntime {
                     .unwrap_or_else(|| panic!("unknown forced action actor: {}", actor.0));
                 (entity.runtime.magic_point, entity.runtime.attack)
             };
+            // 玩家点名要用这个技能：目标选择按「不挑目标」的宽松口径，
+            // 避免因为 AI 的 smart 过滤（例如瘟疫只挑 160~400 血的目标）而放不出来。
             let prepared = if mp >= req_mp {
-                self.prepare_forced_builtin_skill(actor, forced_skill, smart)
+                self.prepare_forced_builtin_skill(actor, forced_skill, false)
             } else {
                 None
             };
