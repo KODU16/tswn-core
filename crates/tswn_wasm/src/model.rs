@@ -70,6 +70,9 @@ pub struct BattleOptions {
     /// 玩家受控队伍编号；传了就会在轮到该队伍本体/分身时暂停等指令。
     #[tsify(optional)]
     pub controlled_team: Option<usize>,
+    /// 开局体力倍率（只作用于受控队伍），1.25 = 125%
+    #[tsify(optional)]
+    pub start_hp_pct: Option<f64>,
 }
 
 impl Default for BattleOptions {
@@ -79,6 +82,7 @@ impl Default for BattleOptions {
             include_icons: None,
             max_rounds: None,
             controlled_team: None,
+            start_hp_pct: None,
         }
     }
 }
@@ -94,6 +98,7 @@ impl BattleOptions {
             options.max_rounds = max_rounds;
         }
         options.controlled_team = self.controlled_team;
+        options.start_hp_pct = self.start_hp_pct;
         options
     }
 }

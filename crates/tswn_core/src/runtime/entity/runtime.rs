@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 
 #[inline(always)]
 fn order_i32(left: &mut i32, right: &mut i32) {
@@ -650,6 +650,11 @@ impl EntityArena {
             })
             .collect();
         Self { entities }
+    }
+
+    /// 遍历所有存活槽位（可变），用于开局体力倍率等一次性调整
+    pub fn iter_all_mut(&mut self) -> impl Iterator<Item = &mut EntityRecord> {
+        self.entities.iter_mut().flatten()
     }
 
     pub fn len(&self) -> usize { self.entities.len() }

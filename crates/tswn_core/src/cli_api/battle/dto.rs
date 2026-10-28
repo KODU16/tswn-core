@@ -1,4 +1,4 @@
-use crate::replay_view::ReplayState;
+﻿use crate::replay_view::ReplayState;
 use crate::runtime::{BINDING_COMPLETION_MAX_ROUNDS, PlrId};
 use serde::Serialize;
 
@@ -16,6 +16,8 @@ pub struct BattleOptions {
     pub max_rounds: usize,
     /// 玩家受控队伍：该队伍的本体与分身必须等前端下指令，否则战斗暂停。
     pub controlled_team: Option<usize>,
+    /// 开局体力倍率（如 1.25 表示以 125% 体力开场）；只作用于受控队伍。
+    pub start_hp_pct: Option<f64>,
 }
 
 impl Default for BattleOptions {
@@ -25,6 +27,7 @@ impl Default for BattleOptions {
             include_icons: false,
             max_rounds: BINDING_COMPLETION_MAX_ROUNDS,
             controlled_team: None,
+            start_hp_pct: None,
         }
     }
 }
