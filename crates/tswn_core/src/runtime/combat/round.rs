@@ -610,6 +610,11 @@ impl CombatRuntime {
         // code = 属性下标 + 1（0 表示没喝药）
         let field = ((code & 0xF) as usize).saturating_sub(1);
         let Some(entity) = self.entities.get_mut(actor) else { return };
+        if field == 9 {
+            // 9 = 能量药水：回复 40 点 MP（上限 100）
+            entity.runtime.magic_point = (entity.runtime.magic_point + 40).min(100);
+            return;
+        }
         if field >= 8 {
             // 8 = 体力药水：回复 25% 最大体力
             let heal = (entity.template.max_hp / 4).max(10);
