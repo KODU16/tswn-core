@@ -381,6 +381,8 @@ impl CombatRuntime {
         pre_action: PlainSkillPreActionOutcome,
     ) -> Option<PreparedPlainAction> {
         crate::runtime::forced_action::hit();
+        // 上一手的药水只持续一回合，这里先还原
+        self.revert_active_potion();
         // 狂暴（含被附体）期间由引擎接管：不接收玩家指令、也不停下来要牌。
         let berserk_forced = !pre_action.clear_forced_action && self.has_plain_berserk_state(actor);
         let mut berserk_submitted = false;
@@ -389,6 +391,9 @@ impl CombatRuntime {
         // 否则玩家能在这段窗口里插别的技能，背刺就永远放不出来。
         if pre_action.forced_skill.is_none() {
         if let Some((forced_skill, forced_mp)) = crate::runtime::forced_action::take(actor.0 as u32) {
+            if let Some(code) = crate::runtime::forced_action::take_potion(actor.0 as u32) {
+                self.apply_potion(actor, code);
+            }
             if berserk_forced {
                 // 狂暴：玩家这一手只用来推进节奏，真正动作由引擎接管
                 berserk_submitted = true;
@@ -597,6 +602,48 @@ impl CombatRuntime {
                 use_magic: false,
                 amount: attack,
             })
+        }
+    }
+
+    /// 喝药：加强当前角色一项属性一回合（不占行动）+ 少量回血
+    fn apply_potion(&mut self, actor: EntityIdx, code: u32) {
+        // code = 属性下标 + 1（0 表示没喝药）
+        let field = ((code & 0xF) as usize).saturating_sub(1);
+        let Some(entity) = self.entities.get_mut(actor) else { return };
+        if field >= 8 {
+            // 8 = 体力药水：回复 25% 最大体力
+            let heal = (entity.template.max_hp / 4).max(10);
+            entity.runtime.hp = (entity.runtime.hp + heal).min(entity.template.max_hp);
+            return;
+        }
+        let slot = match field {
+            0 => &mut entity.runtime.attack,
+            1 => &mut entity.runtime.defense,
+            2 => &mut entity.runtime.speed,
+            3 => &mut entity.runtime.agility,
+            4 => &mut entity.runtime.magic,
+            5 => &mut entity.runtime.resistance,
+            _ => &mut entity.runtime.wisdom,
+        };
+        let delta = (*slot / 4).max(8);
+        *slot += delta;
+        crate::runtime::forced_action::set_active_potion(Some((actor.0, field as u8, delta)));
+    }
+
+    /// 还原上一回合的药水加成
+    fn revert_active_potion(&mut self) {
+        let Some((actor_id, field, delta)) = crate::runtime::forced_action::take_active_potion() else { return };
+        let entity = self.entities.get_mut(EntityIdx(actor_id));
+        let Some(entity) = entity else { return };
+        match field {
+            0 => entity.runtime.attack -= delta,
+            1 => entity.runtime.defense -= delta,
+            2 => entity.runtime.speed -= delta,
+            3 => entity.runtime.agility -= delta,
+            4 => entity.runtime.magic -= delta,
+            5 => entity.runtime.resistance -= delta,
+            6 => entity.runtime.wisdom -= delta,
+            _ => {}
         }
     }
 

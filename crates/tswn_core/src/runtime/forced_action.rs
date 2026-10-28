@@ -1,4 +1,4 @@
-//! 前端强制行动队列（卡牌玩法的注入点）。
+﻿//! 前端强制行动队列（卡牌玩法的注入点）。
 //!
 //! 卡牌游戏里玩家会为「每个自己单位」指定这一次行动用哪个技能。
 //! Runtime 本身只按熟练度概率自动挑选技能，这里提供一个线程内队列：
@@ -82,3 +82,25 @@ pub fn hits() -> u32 {
 pub fn taken() -> u32 {
     TAKEN.with(|cell| cell.get())
 }
+// —— 药水（卡牌玩法注入）：不占回合，加强当前角色一回合 ——
+thread_local! {
+    static POTIONS: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) };
+    static POTION_ACTIVE: std::cell::Cell<Option<(u32, u8, i32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// 登记「轮到某实体时顺手喝一瓶药」；code 的低 4 位是属性下标（0..6），8 = 回血
+pub fn set_potions(list: Vec<(u32, u32)>) {
+    POTIONS.with(|cell| *cell.borrow_mut() = list);
+}
+
+pub fn take_potion(actor: u32) -> Option<u32> {
+    POTIONS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        let index = list.iter().position(|(id, _)| *id == actor)?;
+        Some(list.remove(index).1)
+    })
+}
+
+pub fn set_active_potion(value: Option<(u32, u8, i32)>) { POTION_ACTIVE.with(|cell| cell.set(value)); }
+
+pub fn take_active_potion() -> Option<(u32, u8, i32)> { POTION_ACTIVE.with(|cell| cell.replace(None)) }

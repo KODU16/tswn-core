@@ -385,8 +385,19 @@ pub fn battle_replay_forced(
     // 三元组：actor, skill, mp（0 表示这一手没有指定消耗，由引擎现场掷）
     let pairs = actions
         .chunks_exact(3)
-        .map(|chunk| (chunk[0], chunk[1], (chunk[2] > 0).then_some(chunk[2])))
+        .map(|chunk| {
+            let cost = chunk[2] & 0xff;
+            (chunk[0], chunk[1], (cost > 0).then_some(cost))
+        })
         .collect::<Vec<_>>();
+    let potions = actions
+        .chunks_exact(3)
+        .filter_map(|chunk| {
+            let code = chunk[2] >> 8;
+            (code > 0).then_some((chunk[0], code))
+        })
+        .collect::<Vec<_>>();
+    tswn_core::runtime::forced_action::set_potions(potions);
     tswn_core::runtime::forced_action::set(pairs);
     let result = tswn_core::cli_api::battle_replay(&raw_input, options.to_core());
     tswn_core::runtime::forced_action::clear();
